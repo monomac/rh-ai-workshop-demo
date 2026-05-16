@@ -7,6 +7,7 @@ cells, EN technical comments go in code cells.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -14,13 +15,26 @@ OUT = Path(__file__).parent.parent / "notebooks"
 OUT.mkdir(parents=True, exist_ok=True)
 
 
+def _cell_id(kind: str, lines) -> str:
+    """Deterministic 8-char cell id derived from contents — required by
+    nbformat 4.5+. Stable across rebuilds so diffs stay clean."""
+    h = hashlib.sha1((kind + "\n".join(lines)).encode("utf-8")).hexdigest()
+    return h[:8]
+
+
 def md(*lines: str) -> dict:
-    return {"cell_type": "markdown", "metadata": {}, "source": _src(lines)}
+    return {
+        "cell_type": "markdown",
+        "id": _cell_id("md", lines),
+        "metadata": {},
+        "source": _src(lines),
+    }
 
 
 def code(*lines: str) -> dict:
     return {
         "cell_type": "code",
+        "id": _cell_id("code", lines),
         "execution_count": None,
         "metadata": {},
         "outputs": [],
