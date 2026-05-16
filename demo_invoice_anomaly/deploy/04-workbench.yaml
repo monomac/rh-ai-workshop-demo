@@ -49,10 +49,17 @@ spec:
                 --ServerApp.base_url=/notebook/rh-ai-workshop/invoice-anomaly-wb
             - name: JUPYTER_IMAGE
               value: "s2i-generic-data-science-notebook:3.4"
-            - name: MLFLOW_TRACKING_URI
-              value: http://mlflow-server.rh-ai-workshop.svc.cluster.local:8080
-            - name: MODEL_REGISTRY_URL
-              value: http://model-registry-service.rh-ai-workshop.svc.cluster.local:8080
+            # MLFLOW_TRACKING_URI + MLFLOW_TRACKING_AUTH + MLFLOW_K8S_INTEGRATION
+            # are auto-injected into the pod by the RHOAI `mlflowoperator`
+            # mutating webhook (see KCS 7136121). It also creates the RoleBindings
+            # `<wb>-mlflow` (ClusterRole/mlflow-operator-mlflow-integration) and
+            # `<wb>-rbac-...-auth-delegator` on this notebook's ServiceAccount.
+            # Do NOT set MLFLOW_TRACKING_URI here — the operator overrides it.
+            #
+            # MODEL_REGISTRY_URL is intentionally unset; the demo notebook step
+            # uses the RHOAI Dashboard for registration. To wire it from code,
+            # set it to https://elos-model-registry.rhoai-model-registries.svc:8443
+            # and grant this SA the registry RBAC in `rhoai-model-registries`.
           envFrom:
             - secretRef:
                 name: aws-connection-rhoai-invoices   # injektuje AWS_* proměnné

@@ -28,7 +28,7 @@ demo_invoice_anomaly/
 │   ├── invoices.csv                   # 4 019 řádků, 3 % anomálií (training set)
 │   ├── invoices_new_batch.csv         # 254 řádků (fresh batch ke skórování)
 │   └── sample_review_queue.csv        # referenční výstup notebooku 03 (top 25 podezřelých)
-├── requirements.txt                   # doplnění mlflow nad Standard DS Notebook 3.4
+├── requirements.txt                   # prázdné — vše je v image (vč. mlflow), viz § 3
 ├── src/
 │   ├── generate_invoices.py           # generátor — pokud chceš jiný objem nebo seed
 │   ├── invoice_features.py            # SDÍLENÉ featury (train == score)
@@ -52,17 +52,33 @@ demo_invoice_anomaly/
 
 ---
 
-## 3 · Lokální spuštění (suchý běh před workshopem)
+## 3 · MLflow přímo z platformy (RHOAI 3.4)
+
+MLflow se v `demo_invoice_anomaly` **nic neinstaluje**. RHOAI 3.4 ho:
+
+- má v Standard DS Notebook image (`mlflow 3.10.1+rhaiv.3`, Red Hat build),
+- provozuje jako platformní službu přes DSC komponentu `mlflowoperator`
+  (kontrola: `oc get dsc -A -o jsonpath='{.items[*].spec.components.mlflowoperator.managementState}'`),
+- automaticky workbench podu předá `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_AUTH=kubernetes-namespaced`,
+  `MLFLOW_K8S_INTEGRATION=true` a namountuje SA token z `rh-ai-workshop` namespace.
+
+Auth model: server validuje práva přes `SelfSubjectAccessReview`, **namespace = workspace**.
+RBAC (`<wb>-mlflow` → ClusterRole `mlflow-operator-mlflow-integration` + `system:auth-delegator`)
+zakládá operator sám, jakmile workbench vznikne. Detaily viz
+[KCS 7136121](https://access.redhat.com/articles/7136121).
+
+## 3a · Lokální spuštění (suchý běh před workshopem)
 
 ```bash
-pip install pandas numpy scikit-learn matplotlib mlflow joblib jupyter
+# Lokální závislosti (mimo cluster nutno doinstalovat z PyPI):
+pip install pandas numpy scikit-learn matplotlib 'mlflow>=2.16,<3' joblib jupyter
 cd demo_invoice_anomaly
 python src/generate_invoices.py            # vygeneruje data/invoices.csv
 jupyter lab notebooks/                     # otevři 01 → 02 → 03 postupně
 ```
 
-Notebooky se spustí beze změny bez clusteru — detekují, že `AWS_S3_BUCKET` není
-v env, a načtou data z lokálního adresáře `../data/`.
+Notebooky se spustí beze změny i bez clusteru — detekují, že `AWS_S3_BUCKET` není
+v env, načtou data z lokálního `../data/`, a MLflow zaloguje do `file:./mlruns`.
 
 **Ověřeno:** všechny tři notebooky proběhnou end-to-end na čisté instalaci
 Python 3.10 + balíčky výše. Trénink dává **ROC-AUC ≈ 0.96** a **94 % precision
@@ -127,6 +143,7 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 |--------------------------------------------------------|------------------------------------------------------------------------------------------|
 | Notebook nevidí `AWS_S3_BUCKET`                        | Data Connection nepřipojená k workbenchi. Dashboard → workbench → Attach connection.    |
 | Pipeline failuje s "no access to S3"                   | DSPA má jinou `s3CredentialsSecret`. Sjednoť s `aws-connection-rhoai-invoices`.         |
-| MLflow run nezaloguje                                  | `MLFLOW_TRACKING_URI` v env workbenche nesedí, nebo MLflow pod neběží — zkontroluj svc. |
+| `pip install mlflow` v notebooku selže (`No matching distribution`) | Workbench používá interní RH PyPI mirror, kde je jen RH-build `mlflow 3.10.x+rhaiv.*`. Image už mlflow obsahuje — žádný `pip install` v notebooku **není potřeba**. |
+| MLflow run nezaloguje                                  | Operator nepřipojil env. Zkontroluj `oc get dsc -A` → `mlflowoperator: Managed`; `oc get mlflow -A` → instance `Available`; restartni workbench pod (RoleBindings + env injektuje operator při startu podu). |
 | `oc apply` na DSPA selže s `no matches for kind …`     | Komponenta `datasciencepipelines` v DSC je `Removed`. Změň na `Managed`.                 |
 | `oc apply` na Notebook selže s `no matches for kind …` | Komponenta `workbenches` v DSC je `Removed`. Změň na `Managed`.                          |

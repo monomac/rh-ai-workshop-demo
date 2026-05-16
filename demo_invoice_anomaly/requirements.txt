@@ -1,5 +1,16 @@
-# Top-up packages on the RHOAI 3.4 Standard Data Science Notebook image
-# (odh-workbench-jupyter-datascience-cpu-py312-rhel9). That image already
-# ships pandas, numpy, scikit-learn, matplotlib, boto3, requests, joblib —
-# mlflow is the main one we still need to add for tracking + Model Registry.
-mlflow>=2.16,<3
+# No extra packages needed for in-cluster execution.
+#
+# The RHOAI 3.4 Standard Data Science Notebook image
+# (odh-workbench-jupyter-datascience-cpu-py312-rhel9) already ships:
+#   pandas, numpy, scikit-learn, matplotlib, boto3, requests, joblib,
+#   kfp 2.9, and -- since RHOAI 3.2 / KCS 7136121 -- mlflow itself
+#   (the Red Hat build, e.g. 3.10.1+rhaiv.3).
+#
+# Cluster MLflow is provisioned by the platform via the
+# `mlflowoperator` DSC component; the workbench pod is auto-injected
+# with MLFLOW_TRACKING_URI + MLFLOW_TRACKING_AUTH=kubernetes-namespaced
+# + the namespace SA token. Nothing to install.
+#
+# This file is kept (empty of requirements) so the local-laptop
+# fallback path used by `pip install -r requirements.txt` still
+# works; for local runs see README.md "Lokální spuštění".
