@@ -1,0 +1,26 @@
+invoice_id,vendor,amount_czk,issued_on,po_number,approver,anomaly_score,reason
+INV-000104,Pražská plynárenská a.s.,250000.0,2026-03-26,PO-95762,tklimes,0.1042,podezřele kulatá částka; částka mimo obvyklý rozsah kategorie
+INV-000185,Pražská plynárenská a.s.,236472.92,2026-03-12,,jnovak,0.0968,vysoká částka bez PO; částka mimo obvyklý rozsah kategorie
+INV-000192,T-Mobile Czech Republic,200000.0,2026-02-25,PO-57869,tklimes,0.091,podezřele kulatá částka; částka mimo obvyklý rozsah kategorie
+INV-000137,AdHoc Trading s.r.o. #3529,380271.92,2026-04-15,PO-35248,kvarga,0.0751,částka mimo obvyklý rozsah kategorie; nový dodavatel s vysokou částkou
+INV-000106,AdHoc Trading s.r.o. #4535,382807.54,2026-01-08,PO-23709,jnovak,0.0722,částka mimo obvyklý rozsah kategorie; nový dodavatel s vysokou částkou
+INV-000043,AdHoc Trading s.r.o. #8902,280817.65,2026-04-01,PO-35257,tklimes,0.0526,nový dodavatel s vysokou částkou
+INV-000063,Microsoft Ireland Operations,524602.44,2026-01-20,PO-77611,jnovak,0.0507,částka mimo obvyklý rozsah kategorie
+INV-000078,AdHoc Trading s.r.o. #5075,325199.06,2026-02-04,PO-34997,jnovak,0.0498,částka mimo obvyklý rozsah kategorie; nový dodavatel s vysokou částkou
+INV-000246,AdHoc Trading s.r.o. #5407,319084.55,2026-04-23,PO-38999,ldvorak,0.0461,částka mimo obvyklý rozsah kategorie; nový dodavatel s vysokou částkou
+INV-000028,AdHoc Trading s.r.o. #7645,268690.84,2026-03-05,PO-95277,ldvorak,0.041,nový dodavatel s vysokou částkou
+INV-000081,Pražská plynárenská a.s.,16164.64,2026-03-03,,ldvorak,0.0126,kombinace signálů (viz feature attribution)
+INV-000214,AdHoc Trading s.r.o. #4962,185110.07,2026-01-08,PO-56754,kvarga,0.0106,nový dodavatel s vysokou částkou
+INV-000011,Engie Services a.s.,31134.7,2026-02-25,,jnovak,0.0098,kombinace signálů (viz feature attribution)
+INV-000225,Deloitte Advisory s.r.o.,178778.43,2026-01-16,,tklimes,0.0085,vysoká částka bez PO
+INV-000138,AdHoc Trading s.r.o. #9874,188855.82,2026-03-05,PO-18162,ldvorak,0.0081,nový dodavatel s vysokou částkou
+INV-000131,Engie Services a.s.,25243.81,2026-02-04,,kvarga,0.0019,kombinace signálů (viz feature attribution)
+INV-000167,Engie Services a.s.,27964.15,2026-04-27,,jnovak,-0.0007,kombinace signálů (viz feature attribution)
+INV-000231,PwC Česká republika,575956.65,2026-02-19,PO-37260,ldvorak,-0.0064,částka mimo obvyklý rozsah kategorie
+INV-000055,Alza.cz a.s.,2109.67,2026-04-07,,msrnec,-0.0108,kombinace signálů (viz feature attribution)
+INV-000134,Makro Cash & Carry,7583.13,2026-04-21,,msrnec,-0.0109,kombinace signálů (viz feature attribution)
+INV-000041,T-Mobile Czech Republic,10282.53,2026-02-05,,jnovak,-0.0159,kombinace signálů (viz feature attribution)
+INV-000253,Havel & Partners,66086.57,2026-01-30,,msrnec,-0.0191,kombinace signálů (viz feature attribution)
+INV-000187,O2 Czech Republic,6370.56,2026-03-30,,tklimes,-0.0203,kombinace signálů (viz feature attribution)
+INV-000129,T-Mobile Czech Republic,7458.75,2026-03-24,,jnovak,-0.0264,kombinace signálů (viz feature attribution)
+INV-000021,Lagardère Travel Retail,159000.13,2026-04-29,PO-76744,kvarga,-0.0279,částka mimo obvyklý rozsah kategorie

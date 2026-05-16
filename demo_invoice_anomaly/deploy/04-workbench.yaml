@@ -1,0 +1,71 @@
+---
+# Workbench (Notebook CR) pro demo. Standardní Data Science Notebook image,
+# 2 CPU / 8 Gi RAM, ephemeral volume pro session. Data Connection se připojí
+# automaticky díky `notebooks.opendatahub.io/inject-oauth: 'true'` a sidecar
+# secret reference níže.
+#
+# Po `oc apply` se workbench objeví v RHOAI Dashboard a controller / analytik
+# si ho jedním klikem nastartuje.
+apiVersion: kubeflow.org/v1
+kind: Notebook
+metadata:
+  name: invoice-anomaly-wb
+  namespace: rh-ai-workshop
+  labels:
+    app: invoice-anomaly-wb
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/odh-managed: "true"
+  annotations:
+    openshift.io/display-name: "Invoice anomaly — workbench"
+    opendatahub.io/username: "sp"
+    notebooks.opendatahub.io/inject-oauth: "true"
+spec:
+  template:
+    spec:
+      serviceAccountName: invoice-anomaly-wb
+      containers:
+        - name: invoice-anomaly-wb
+          # RHOAI 3.4 Standard Data Science Notebook (Python 3.11, pandas/sklearn/mlflow ready)
+          image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests: { cpu: "1",  memory: 4Gi }
+            limits:   { cpu: "2",  memory: 8Gi }
+          env:
+            - name: NOTEBOOK_ARGS
+              value: |
+                --ServerApp.token=''
+                --ServerApp.password=''
+                --ServerApp.base_url=/notebook/rh-ai-workshop/invoice-anomaly-wb
+            - name: JUPYTER_IMAGE
+              value: "s2i-generic-data-science-notebook:2024.2"
+            - name: MLFLOW_TRACKING_URI
+              value: http://mlflow-server.rh-ai-workshop.svc.cluster.local:8080
+            - name: MODEL_REGISTRY_URL
+              value: http://model-registry-service.rh-ai-workshop.svc.cluster.local:8080
+          envFrom:
+            - secretRef:
+                name: aws-connection-rhoai-invoices   # injektuje AWS_* proměnné
+          volumeMounts:
+            - { name: workdir, mountPath: /opt/app-root/src }
+          ports:
+            - { name: notebook-port, containerPort: 8888, protocol: TCP }
+      volumes:
+        - name: workdir
+          persistentVolumeClaim:
+            claimName: invoice-anomaly-wb-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: invoice-anomaly-wb-pvc
+  namespace: rh-ai-workshop
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: invoice-anomaly-wb
+  namespace: rh-ai-workshop

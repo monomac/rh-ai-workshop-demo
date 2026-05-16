@@ -1,0 +1,444 @@
+# PIPELINE DEFINITION
+# Name: invoice-anomaly
+# Description: Trénink a registrace modelu pro detekci anomálií ve fakturách.
+# Inputs:
+#    contamination: float [Default: 0.03]
+#    min_roc_auc: float [Default: 0.85]
+#    model_name: str [Default: 'invoice-anomaly-detector']
+#    n_estimators: int [Default: 200.0]
+#    random_state: int [Default: 42.0]
+#    registry_url: str [Default: 'http://model-registry-service:8080']
+#    s3_bucket: str [Default: 'rhoai-workshop-invoices']
+#    s3_key: str [Default: 'invoices.csv']
+components:
+  comp-condition-1:
+    dag:
+      tasks:
+        register-model:
+          cachingOptions:
+            enableCache: true
+          componentRef:
+            name: comp-register-model
+          inputs:
+            artifacts:
+              in_model:
+                componentInputArtifact: pipelinechannel--train-model-out_model
+            parameters:
+              model_name:
+                componentInputParameter: pipelinechannel--model_name
+              registry_url:
+                componentInputParameter: pipelinechannel--registry_url
+              s3_bucket:
+                componentInputParameter: pipelinechannel--s3_bucket
+          taskInfo:
+            name: register-model
+    inputDefinitions:
+      artifacts:
+        pipelinechannel--train-model-out_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        pipelinechannel--evaluate-model-Output:
+          parameterType: BOOLEAN
+        pipelinechannel--model_name:
+          parameterType: STRING
+        pipelinechannel--registry_url:
+          parameterType: STRING
+        pipelinechannel--s3_bucket:
+          parameterType: STRING
+  comp-evaluate-model:
+    executorLabel: exec-evaluate-model
+    inputDefinitions:
+      artifacts:
+        in_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+      parameters:
+        min_roc_auc:
+          parameterType: NUMBER_DOUBLE
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: BOOLEAN
+  comp-ingest-invoices:
+    executorLabel: exec-ingest-invoices
+    inputDefinitions:
+      parameters:
+        s3_bucket:
+          parameterType: STRING
+        s3_key:
+          parameterType: STRING
+    outputDefinitions:
+      artifacts:
+        out_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+  comp-register-model:
+    executorLabel: exec-register-model
+    inputDefinitions:
+      artifacts:
+        in_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+      parameters:
+        model_name:
+          parameterType: STRING
+        registry_url:
+          parameterType: STRING
+        s3_bucket:
+          parameterType: STRING
+    outputDefinitions:
+      parameters:
+        Output:
+          parameterType: STRING
+  comp-train-model:
+    executorLabel: exec-train-model
+    inputDefinitions:
+      artifacts:
+        in_dataset:
+          artifactType:
+            schemaTitle: system.Dataset
+            schemaVersion: 0.0.1
+      parameters:
+        contamination:
+          parameterType: NUMBER_DOUBLE
+        n_estimators:
+          parameterType: NUMBER_INTEGER
+        random_state:
+          parameterType: NUMBER_INTEGER
+    outputDefinitions:
+      artifacts:
+        out_metrics:
+          artifactType:
+            schemaTitle: system.Metrics
+            schemaVersion: 0.0.1
+        out_model:
+          artifactType:
+            schemaTitle: system.Model
+            schemaVersion: 0.0.1
+deploymentSpec:
+  executors:
+    exec-evaluate-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - evaluate_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef evaluate_model(\n    in_metrics: Input[Metrics],\n    min_roc_auc:\
+          \ float,\n) -> bool:\n    \"\"\"Gate: pass only if ROC-AUC meets the configured\
+          \ threshold.\"\"\"\n    import json\n    raw = open(in_metrics.path).read()\n\
+          \    print(\"metrics file:\", raw)\n    data = json.loads(raw)\n    # KFP\
+          \ metrics file shape: {\"metrics\": [{\"name\": \"roc_auc\", \"numberValue\"\
+          : ...}, ...]}\n    by_name = {m[\"name\"]: m.get(\"numberValue\", 0) for\
+          \ m in data.get(\"metrics\", [])}\n    roc = by_name.get(\"roc_auc\", 0)\n\
+          \    decision = roc >= min_roc_auc\n    print(f\"roc_auc={roc:.3f}, threshold={min_roc_auc:.3f}\
+          \ -> promote={decision}\")\n    return decision\n\n"
+        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+    exec-ingest-invoices:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - ingest_invoices
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.*'\
+          \ 'boto3==1.34.*'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef ingest_invoices(\n    s3_bucket: str,\n    s3_key: str,\n   \
+          \ out_dataset: Output[Dataset],\n) -> None:\n    \"\"\"Pull the latest invoices\
+          \ CSV from MinIO/S3 and stage it for training.\"\"\"\n    import os\n  \
+          \  import boto3\n    import pandas as pd\n\n    s3 = boto3.client(\n   \
+          \     \"s3\",\n        endpoint_url=os.environ.get(\"AWS_S3_ENDPOINT\"),\n\
+          \        region_name=os.environ.get(\"AWS_DEFAULT_REGION\", \"us-east-1\"\
+          ),\n    )\n    body = s3.get_object(Bucket=s3_bucket, Key=s3_key)[\"Body\"\
+          ].read()\n    out_path = out_dataset.path + \".csv\"\n    with open(out_path,\
+          \ \"wb\") as f:\n        f.write(body)\n    out_dataset.path = out_path\n\
+          \    df = pd.read_csv(out_path)\n    print(f\"ingested {len(df)} rows from\
+          \ s3://{s3_bucket}/{s3_key}\")\n\n"
+        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+    exec-register-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - register_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'boto3==1.34.*'\
+          \ 'requests==2.32.*'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
+          3.9\"' && \"$0\" \"$@\"\n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef register_model(\n    in_model: Input[Model],\n    s3_bucket:\
+          \ str,\n    model_name: str,\n    registry_url: str,\n) -> str:\n    \"\"\
+          \"Copy the model to a versioned S3 key and register it in Model Registry.\"\
+          \"\"\n    import os\n    import datetime as dt\n    import boto3\n    import\
+          \ requests\n\n    s3 = boto3.client(\n        \"s3\",\n        endpoint_url=os.environ.get(\"\
+          AWS_S3_ENDPOINT\"),\n        region_name=os.environ.get(\"AWS_DEFAULT_REGION\"\
+          , \"us-east-1\"),\n    )\n    version = dt.datetime.utcnow().strftime(\"\
+          %Y%m%dT%H%M%S\")\n    key = f\"models/{model_name}/{version}/model.joblib\"\
+          \n    with open(in_model.path, \"rb\") as f:\n        s3.put_object(Bucket=s3_bucket,\
+          \ Key=key, Body=f.read())\n    s3_uri = f\"s3://{s3_bucket}/{key}\"\n  \
+          \  print(\"uploaded:\", s3_uri)\n\n    if registry_url:\n        try:\n\
+          \            payload = {\n                \"name\": model_name,\n      \
+          \          \"description\": f\"Invoice anomaly model {version} (auto-promoted\
+          \ by pipeline)\",\n                \"owner\": \"controlling@example.com\"\
+          ,\n            }\n            r = requests.post(\n                f\"{registry_url}/api/model_registry/v1alpha3/registered_models\"\
+          ,\n                json=payload, timeout=10,\n            )\n          \
+          \  print(\"registry response:\", r.status_code, r.text[:200])\n        except\
+          \ Exception as e:  # noqa: BLE001\n            print(\"registry call failed\
+          \ (non-fatal):\", e)\n    return s3_uri\n\n"
+        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+    exec-train-model:
+      container:
+        args:
+        - --executor_input
+        - '{{$}}'
+        - --function_to_execute
+        - train_model
+        command:
+        - sh
+        - -c
+        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
+          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.*'\
+          \ 'numpy==1.26.*' 'scikit-learn==1.4.*' 'joblib==1.4.*'  &&  python3 -m\
+          \ pip install --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps'\
+          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
+          \n"
+        - sh
+        - -ec
+        - 'program_path=$(mktemp -d)
+
+
+          printf "%s" "$0" > "$program_path/ephemeral_component.py"
+
+          _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
+
+          '
+        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          \ *\n\ndef train_model(\n    in_dataset: Input[Dataset],\n    contamination:\
+          \ float,\n    n_estimators: int,\n    random_state: int,\n    out_model:\
+          \ Output[Model],\n    out_metrics: Output[Metrics],\n) -> None:\n    \"\"\
+          \"Train Isolation Forest on the staged invoices dataset.\"\"\"\n    import\
+          \ json\n    import joblib\n    import numpy as np\n    import pandas as\
+          \ pd\n    from datetime import date\n    from sklearn.ensemble import IsolationForest\n\
+          \    from sklearn.metrics import roc_auc_score, average_precision_score\n\
+          \    from sklearn.pipeline import Pipeline\n    from sklearn.preprocessing\
+          \ import StandardScaler\n\n    df = pd.read_csv(in_dataset.path)\n    df[\"\
+          issued_on\"] = pd.to_datetime(df[\"issued_on\"]).dt.date\n    df[\"due_on\"\
+          ]    = pd.to_datetime(df[\"due_on\"]).dt.date\n\n    # Inline feature engineering\
+          \ \u2014 kept short, mirrors src/invoice_features.py\n    df[\"log_amount\"\
+          ]    = np.log1p(df[\"amount_czk\"])\n    cat_stats = df.groupby(\"category\"\
+          )[\"amount_czk\"].agg([\"mean\", \"std\"]).fillna(1)\n    cat_stats[\"std\"\
+          ]    = cat_stats[\"std\"].replace(0, 1)\n    df = df.merge(cat_stats.rename(columns={\"\
+          mean\": \"_m\", \"std\": \"_s\"}),\n                  left_on=\"category\"\
+          , right_index=True, how=\"left\")\n    df[\"amount_zscore_in_category\"\
+          ] = (df[\"amount_czk\"] - df[\"_m\"]) / df[\"_s\"]\n    df[\"is_weekend\"\
+          ]     = pd.to_datetime(df[\"issued_on\"]).dt.weekday.ge(5).astype(int)\n\
+          \    df[\"missing_po\"]     = df[\"po_number\"].fillna(\"\").astype(str).eq(\"\
+          \").astype(int)\n    df[\"round_sum_flag\"] = ((df[\"amount_czk\"] % 10_000\
+          \ == 0) & (df[\"amount_czk\"] >= 10_000)).astype(int)\n    df[\"days_to_due\"\
+          ]    = (pd.to_datetime(df[\"due_on\"]) - pd.to_datetime(df[\"issued_on\"\
+          ])).dt.days\n    vfreq = df[\"vendor\"].value_counts()\n    df[\"vendor_frequency\"\
+          ] = df[\"vendor\"].map(vfreq).fillna(0)\n    cat_idx = {c: i for i, c in\
+          \ enumerate(sorted(df[\"category\"].unique()))}\n    df[\"category_idx\"\
+          ]   = df[\"category\"].map(cat_idx)\n\n    feature_cols = [\"log_amount\"\
+          , \"amount_zscore_in_category\", \"is_weekend\",\n                    \"\
+          missing_po\", \"vendor_frequency\", \"round_sum_flag\",\n              \
+          \      \"days_to_due\", \"category_idx\"]\n    X = df[feature_cols].astype(float).values\n\
+          \n    pipe = Pipeline([\n        (\"scaler\", StandardScaler()),\n     \
+          \   (\"iforest\", IsolationForest(contamination=contamination,\n       \
+          \                             n_estimators=n_estimators,\n             \
+          \                       random_state=random_state)),\n    ])\n    pipe.fit(X)\n\
+          \n    scores = -pipe.decision_function(X)\n    y      = df[\"is_anomaly\"\
+          ].values if \"is_anomaly\" in df.columns else None\n\n    metrics = {\"\
+          n_rows\": len(df)}\n    if y is not None and y.sum() > 0:\n        metrics[\"\
+          roc_auc\"] = float(roc_auc_score(y, scores))\n        metrics[\"pr_auc\"\
+          ]  = float(average_precision_score(y, scores))\n\n    joblib.dump({\n  \
+          \      \"pipeline\": pipe,\n        \"feature_columns\": feature_cols,\n\
+          \        \"category_index\": cat_idx,\n        \"vendor_freq_table\": vfreq.to_dict(),\n\
+          \        \"category_stats\": cat_stats.to_dict(orient=\"index\"),\n    \
+          \    \"metrics\": metrics,\n        \"trained_on\": str(date.today()),\n\
+          \    }, out_model.path)\n\n    for k, v in metrics.items():\n        out_metrics.log_metric(k,\
+          \ v)\n    print(\"metrics:\", json.dumps(metrics, indent=2))\n\n"
+        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+pipelineInfo:
+  description: "Tr\xE9nink a registrace modelu pro detekci anom\xE1li\xED ve faktur\xE1\
+    ch."
+  name: invoice-anomaly
+root:
+  dag:
+    tasks:
+      condition-1:
+        componentRef:
+          name: comp-condition-1
+        dependentTasks:
+        - evaluate-model
+        - train-model
+        inputs:
+          artifacts:
+            pipelinechannel--train-model-out_model:
+              taskOutputArtifact:
+                outputArtifactKey: out_model
+                producerTask: train-model
+          parameters:
+            pipelinechannel--evaluate-model-Output:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: evaluate-model
+            pipelinechannel--model_name:
+              componentInputParameter: model_name
+            pipelinechannel--registry_url:
+              componentInputParameter: registry_url
+            pipelinechannel--s3_bucket:
+              componentInputParameter: s3_bucket
+        taskInfo:
+          name: promote-if-passing
+        triggerPolicy:
+          condition: inputs.parameter_values['pipelinechannel--evaluate-model-Output']
+            == true
+      evaluate-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-evaluate-model
+        dependentTasks:
+        - train-model
+        inputs:
+          artifacts:
+            in_metrics:
+              taskOutputArtifact:
+                outputArtifactKey: out_metrics
+                producerTask: train-model
+          parameters:
+            min_roc_auc:
+              componentInputParameter: min_roc_auc
+        taskInfo:
+          name: evaluate-model
+      ingest-invoices:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-ingest-invoices
+        inputs:
+          parameters:
+            s3_bucket:
+              componentInputParameter: s3_bucket
+            s3_key:
+              componentInputParameter: s3_key
+        taskInfo:
+          name: ingest-invoices
+      train-model:
+        cachingOptions:
+          enableCache: true
+        componentRef:
+          name: comp-train-model
+        dependentTasks:
+        - ingest-invoices
+        inputs:
+          artifacts:
+            in_dataset:
+              taskOutputArtifact:
+                outputArtifactKey: out_dataset
+                producerTask: ingest-invoices
+          parameters:
+            contamination:
+              componentInputParameter: contamination
+            n_estimators:
+              componentInputParameter: n_estimators
+            random_state:
+              componentInputParameter: random_state
+        taskInfo:
+          name: train-model
+  inputDefinitions:
+    parameters:
+      contamination:
+        defaultValue: 0.03
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      min_roc_auc:
+        defaultValue: 0.85
+        isOptional: true
+        parameterType: NUMBER_DOUBLE
+      model_name:
+        defaultValue: invoice-anomaly-detector
+        isOptional: true
+        parameterType: STRING
+      n_estimators:
+        defaultValue: 200.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      random_state:
+        defaultValue: 42.0
+        isOptional: true
+        parameterType: NUMBER_INTEGER
+      registry_url:
+        defaultValue: http://model-registry-service:8080
+        isOptional: true
+        parameterType: STRING
+      s3_bucket:
+        defaultValue: rhoai-workshop-invoices
+        isOptional: true
+        parameterType: STRING
+      s3_key:
+        defaultValue: invoices.csv
+        isOptional: true
+        parameterType: STRING
+schemaVersion: 2.1.0
+sdkVersion: kfp-2.16.1

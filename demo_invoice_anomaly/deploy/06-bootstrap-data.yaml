@@ -1,0 +1,41 @@
+---
+# Bootstrap Job: vytvoří bucket v MinIO a nahraje synthetic invoice CSV,
+# který je v ConfigMapě níže (zkrácený sample) NEBO si ho stáhne z URL.
+# Pro workshop je čistší cesta `oc cp` lokálního CSV — ten konfigmap-přístup
+# tady necháváme jen jako fallback pro CI.
+#
+# Doporučený manuální postup:
+#   oc -n rh-ai-workshop port-forward svc/minio 9001:9001 &
+#   open http://localhost:9001
+#   # login minioadmin / change-me-in-prod
+#   # vytvoř bucket rhoai-workshop-invoices a nahraj data/invoices.csv
+#
+# nebo přes mc:
+#   mc alias set wb http://localhost:9000 minioadmin change-me-in-prod
+#   mc mb wb/rhoai-workshop-invoices
+#   mc cp demo_invoice_anomaly/data/invoices.csv wb/rhoai-workshop-invoices/
+#   mc cp demo_invoice_anomaly/data/invoices_new_batch.csv wb/rhoai-workshop-invoices/
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bootstrap-bucket
+  namespace: rh-ai-workshop
+spec:
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:RELEASE.2024-11-21T17-21-54Z
+          envFrom:
+            - secretRef: { name: aws-connection-rhoai-invoices }
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              mc alias set wb "$AWS_S3_ENDPOINT" "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY"
+              mc mb --ignore-existing wb/"$AWS_S3_BUCKET"
+              echo "bucket $AWS_S3_BUCKET ready"
+              echo "now upload demo_invoice_anomaly/data/*.csv via 'mc cp' from your laptop"

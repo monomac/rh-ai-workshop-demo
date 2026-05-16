@@ -1,0 +1,14 @@
+---
+# Namespace pro workshopovou demo. Anotace `opendatahub.io/dashboard: 'true'`
+# způsobí, že se projekt objeví v RHOAI Dashboardu jako Data Science Project.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rh-ai-workshop
+  labels:
+    kubernetes.io/metadata.name: rh-ai-workshop
+    opendatahub.io/dashboard: "true"
+    modelmesh-enabled: "false"
+  annotations:
+    openshift.io/display-name: "RH AI Workshop — Invoice Anomaly Demo"
+    openshift.io/description: "Slide 20 demo: controller, MLflow, Model Registry, DS Pipeline."

@@ -1,0 +1,36 @@
+---
+# Data Science Pipelines Application — instance pipeline serveru pro tento namespace.
+# RHOAI 3.4: API `datasciencepipelinesapplications.opendatahub.io/v1`.
+# Po ready stavu se v RHOAI Dashboardu → Project → Pipelines objeví server,
+# na který lze nahrát zkompilované invoice_anomaly_pipeline.yaml.
+apiVersion: datasciencepipelinesapplications.opendatahub.io/v1
+kind: DataSciencePipelinesApplication
+metadata:
+  name: dspa
+  namespace: rh-ai-workshop
+spec:
+  dspVersion: v2
+  objectStorage:
+    externalStorage:
+      bucket: rhoai-workshop-invoices
+      host: minio.rh-ai-workshop.svc.cluster.local:9000
+      port: ""
+      scheme: http
+      region: us-east-1
+      s3CredentialsSecret:
+        accessKey: AWS_ACCESS_KEY_ID
+        secretKey: AWS_SECRET_ACCESS_KEY
+        secretName: aws-connection-rhoai-invoices
+  apiServer:
+    deploy: true
+    enableSamplePipeline: false
+  persistenceAgent:
+    deploy: true
+  scheduledWorkflow:
+    deploy: true
+  database:
+    disableHealthCheck: false
+    mariaDB:
+      deploy: true
+      pipelineDBName: mlpipeline
+      pvcSize: 10Gi

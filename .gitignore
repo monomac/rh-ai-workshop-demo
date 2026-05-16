@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# HARD EXCLUSIONS — never publish these
+# ---------------------------------------------------------------------------
+
+# Cluster credentials and any kubeconfig variants
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+.kube/
+
+# Full cluster state backups — may contain base64-encoded secrets,
+# pull-secrets, certs, tokens
+backup-*/
+backups/
+
+# Red Hat-internal / confidential decks
+Q1-CY2026-Red-Hat-AI-Whats-New-and-Whats-Next-Slides.pdf
+*-Red-Hat-AI-*-Slides.pdf
+
+# Workshop presentation decks (per user choice — keep private)
+*.pptx
+~$*.pptx
+~$*.docx
+~$*.xlsx
+
+# Generic credential and key patterns — belt-and-braces
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*credentials*
+*.env
+.env*
+
+# ---------------------------------------------------------------------------
+# Python / Jupyter housekeeping
+# ---------------------------------------------------------------------------
+
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# MLflow local tracking, locally trained model binaries
+mlruns/
+mlflow.db
+*.joblib
+
+# CSVs that are demo-state output (review queues are generated per-run)
+demo_invoice_anomaly/data/review_queue_*.csv
+
+# ---------------------------------------------------------------------------
+# OS / editor noise
+# ---------------------------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~

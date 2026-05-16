@@ -1,0 +1,25 @@
+---
+# Data Connection — secret se standardními klíči, které RHOAI workbench
+# rozpozná a vystaví na notebooku jako env vary AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_S3_BUCKET, AWS_DEFAULT_REGION.
+#
+# Po vytvoření tohoto secretu se DC objeví v RHOAI Dashboard → Data Science
+# Project → Data connections, a půjde připojit k workbenchi a pipeline.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-connection-rhoai-invoices
+  namespace: rh-ai-workshop
+  labels:
+    opendatahub.io/dashboard: "true"
+    opendatahub.io/managed: "true"
+  annotations:
+    openshift.io/display-name: "MinIO — invoices bucket"
+    opendatahub.io/connection-type: "s3"
+type: Opaque
+stringData:
+  AWS_ACCESS_KEY_ID:     minioadmin
+  AWS_SECRET_ACCESS_KEY: change-me-in-prod
+  AWS_S3_ENDPOINT:       http://minio.rh-ai-workshop.svc.cluster.local:9000
+  AWS_S3_BUCKET:         rhoai-workshop-invoices
+  AWS_DEFAULT_REGION:    us-east-1
