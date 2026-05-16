@@ -74,7 +74,23 @@ def write_notebook(name: str, cells: list[dict]) -> None:
 # Notebook 01 — Exploration (controller POV)
 # ---------------------------------------------------------------------------
 
+SETUP_MD = md(
+    "## 0 · Setup prostředí",
+    "",
+    "RHOAI _minimal-gpu_ image obsahuje JupyterLab + Python, ale ne pandas /",
+    "sklearn / mlflow. První spuštění proto doinstaluje balíčky z",
+    "`requirements.txt` (idempotentní — podruhé už nic nedělá).",
+)
+
+SETUP_CODE = code(
+    "# Doinstaluj závislosti pro tento notebook (cca 30 s při prvním spuštění).",
+    "%pip install -q -r ../requirements.txt",
+)
+
+
 nb01 = [
+    SETUP_MD,
+    SETUP_CODE,
     md(
         "# 01 · Průzkum faktur — pohled controllera",
         "",
@@ -197,6 +213,8 @@ write_notebook("01_explore_invoices.ipynb", nb01)
 # ---------------------------------------------------------------------------
 
 nb02 = [
+    SETUP_MD,
+    SETUP_CODE,
     md(
         "# 02 · Trénink modelu pro detekci anomálií",
         "",
@@ -385,6 +403,8 @@ write_notebook("02_train_model.ipynb", nb02)
 # ---------------------------------------------------------------------------
 
 nb03 = [
+    SETUP_MD,
+    SETUP_CODE,
     md(
         "# 03 · Skórování nových faktur a review queue",
         "",

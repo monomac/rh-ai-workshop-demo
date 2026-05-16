@@ -28,6 +28,7 @@ demo_invoice_anomaly/
 │   ├── invoices.csv                   # 4 019 řádků, 3 % anomálií (training set)
 │   ├── invoices_new_batch.csv         # 254 řádků (fresh batch ke skórování)
 │   └── sample_review_queue.csv        # referenční výstup notebooku 03 (top 25 podezřelých)
+├── requirements.txt                   # pip deps doplněné do minimal-gpu:3.4 image
 ├── src/
 │   ├── generate_invoices.py           # generátor — pokud chceš jiný objem nebo seed
 │   ├── invoice_features.py            # SDÍLENÉ featury (train == score)

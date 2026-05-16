@@ -19,15 +19,20 @@ metadata:
     openshift.io/display-name: "Invoice anomaly — workbench"
     opendatahub.io/username: "sp"
     notebooks.opendatahub.io/inject-oauth: "true"
+    # Pin to RHOAI 3.4 minimal-gpu image at git commit d3137ca — matches
+    # the cluster's existing test-wb workbench, so we know it pulls cleanly.
+    notebooks.opendatahub.io/last-image-selection: "minimal-gpu:3.4"
+    notebooks.opendatahub.io/last-image-version-git-commit-selection: "d3137ca"
 spec:
   template:
     spec:
       serviceAccountName: invoice-anomaly-wb
       containers:
         - name: invoice-anomaly-wb
-          # RHOAI 3.4 Jupyter Data Science workbench — Python 3.12 / RHEL 9.
-          # Digest pinned to what is registered in the cluster's CSV.
-          image: registry.redhat.io/rhoai/odh-workbench-jupyter-datascience-cpu-py312-rhel9@sha256:47ee99b94c4172f1d16ff968f3a67b2ca9f863af83e2e02446249f1ea357ae1f
+          # RHOAI 3.4 minimal-gpu workbench, build d3137ca.
+          # Resolved via the cluster's ImageStream so OCP picks up the latest
+          # rebuild for the :3.4 tag without us re-pinning the digest.
+          image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/minimal-gpu:3.4
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: "1",  memory: 4Gi }
@@ -39,7 +44,7 @@ spec:
                 --ServerApp.password=''
                 --ServerApp.base_url=/notebook/rh-ai-workshop/invoice-anomaly-wb
             - name: JUPYTER_IMAGE
-              value: "odh-workbench-jupyter-datascience-cpu-py312-rhel9"
+              value: "minimal-gpu:3.4"
             - name: MLFLOW_TRACKING_URI
               value: http://mlflow-server.rh-ai-workshop.svc.cluster.local:8080
             - name: MODEL_REGISTRY_URL
