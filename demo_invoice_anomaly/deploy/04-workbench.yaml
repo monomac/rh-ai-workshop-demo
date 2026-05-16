@@ -55,11 +55,13 @@ spec:
             # `<wb>-mlflow` (ClusterRole/mlflow-operator-mlflow-integration) and
             # `<wb>-rbac-...-auth-delegator` on this notebook's ServiceAccount.
             # Do NOT set MLFLOW_TRACKING_URI here — the operator overrides it.
-            #
-            # MODEL_REGISTRY_URL is intentionally unset; the demo notebook step
-            # uses the RHOAI Dashboard for registration. To wire it from code,
-            # set it to https://elos-model-registry.rhoai-model-registries.svc:8443
-            # and grant this SA the registry RBAC in `rhoai-model-registries`.
+            - name: MODEL_REGISTRY_URL
+              # External route of `elos-model-registry` in `rhoai-model-registries`.
+              # NB the in-cluster Service is blocked by a NetworkPolicy that only
+              # permits ingress from the OpenShift router, so we have to go via
+              # the route. Cross-namespace registry RBAC for this SA is granted
+              # by deploy/07-model-registry-rbac.yaml.
+              value: https://elos-model-registry-rest.apps.rosa.sa-ai.oidv.p3.openshiftapps.com
           envFrom:
             - secretRef:
                 name: aws-connection-rhoai-invoices   # injektuje AWS_* proměnné

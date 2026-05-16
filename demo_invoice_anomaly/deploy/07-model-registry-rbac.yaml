@@ -1,0 +1,34 @@
+# Grant the workbench ServiceAccount permission to use the cluster's
+# Model Registry (`elos-model-registry`) from notebook 03.
+#
+# Why a RoleBinding in `rhoai-model-registries` (not in our project ns):
+#   The registry's auth proxy validates client tokens by issuing
+#   SubjectAccessReview against the Service object that fronts the
+#   registry (verbs `get` on `services/elos-model-registry` and
+#   `endpoints/elos-model-registry`).  So the *binding* has to live
+#   where the Service lives.
+#
+# Why a binding to an existing Role (and not a custom one):
+#   `registry-user-elos-model-registry` is shipped with the
+#   model-registry-operator and is what the dashboard's "Permissions"
+#   tab grants when a user is added to the registry.  We just wire the
+#   wb SA into the same flow.
+#
+# This is cross-namespace RBAC -- a Notebook's auto-managed RoleBindings
+# live only inside the project namespace, so we manage this one
+# ourselves rather than via the Dashboard.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: invoice-anomaly-wb-registry-user
+  namespace: rhoai-model-registries
+  labels:
+    app: invoice-anomaly-wb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: registry-user-elos-model-registry
+subjects:
+  - kind: ServiceAccount
+    name: invoice-anomaly-wb
+    namespace: rh-ai-workshop

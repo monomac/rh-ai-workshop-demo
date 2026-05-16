@@ -44,9 +44,10 @@ demo_invoice_anomaly/
     ├── 01-namespace.yaml
     ├── 02-minio.yaml
     ├── 03-data-connection.yaml
-    ├── 04-workbench.yaml
+    ├── 04-workbench.yaml               # workbench Notebook CR + SA + PVC + env (vč. MODEL_REGISTRY_URL)
     ├── 05-dspa.yaml
     ├── 06-bootstrap-data.yaml
+    ├── 07-model-registry-rbac.yaml     # cross-ns RoleBinding → registry-user-elos-model-registry
     └── install.sh
 ```
 
@@ -144,6 +145,9 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 | Notebook nevidí `AWS_S3_BUCKET`                        | Data Connection nepřipojená k workbenchi. Dashboard → workbench → Attach connection.    |
 | Pipeline failuje s "no access to S3"                   | DSPA má jinou `s3CredentialsSecret`. Sjednoť s `aws-connection-rhoai-invoices`.         |
 | `pip install mlflow` v notebooku selže (`No matching distribution`) | Workbench používá interní RH PyPI mirror, kde je jen RH-build `mlflow 3.10.x+rhaiv.*`. Image už mlflow obsahuje — žádný `pip install` v notebooku **není potřeba**. |
+| Notebook 03 §3.5 → `NameResolutionError` / `Failed to resolve model-registry-service.<ns>.svc...` | Notebook CR má starý `MODEL_REGISTRY_URL`. Reapply `deploy/04-workbench.yaml` (nový pointuje na externí route registru) a smaž pod, ať si vezme nové env. |
+| Notebook 03 §3.5 → HTTP 403 z registru                  | SA nemá RBAC na `services/elos-model-registry`. Apply `deploy/07-model-registry-rbac.yaml`. |
+| Notebook 03 §3.5 → HTTP 422 "registeredModelId is zero value" | API v1alpha3 vyžaduje `registeredModelId` v body i v URL cestě verze. Notebook to už dělá; pokud editujete buňku, nezapomeňte na to. |
 | MLflow run nezaloguje                                  | Operator nepřipojil env. Zkontroluj `oc get dsc -A` → `mlflowoperator: Managed`; `oc get mlflow -A` → instance `Available`; restartni workbench pod (RoleBindings + env injektuje operator při startu podu). |
 | `oc apply` na DSPA selže s `no matches for kind …`     | Komponenta `datasciencepipelines` v DSC je `Removed`. Změň na `Managed`.                 |
 | `oc apply` na Notebook selže s `no matches for kind …` | Komponenta `workbenches` v DSC je `Removed`. Změň na `Managed`.                          |

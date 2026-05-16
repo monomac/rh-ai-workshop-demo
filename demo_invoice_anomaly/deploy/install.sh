@@ -88,6 +88,7 @@ do_install() {
   oc apply -f "$HERE/03-data-connection.yaml"
   oc apply -f "$HERE/05-dspa.yaml"
   oc apply -f "$HERE/04-workbench.yaml"
+  oc apply -f "$HERE/07-model-registry-rbac.yaml"
 
   echo "==> Waiting for MinIO"
   oc -n "$NS" rollout status deploy/minio --timeout=180s
@@ -123,6 +124,7 @@ do_uninstall() {
 
   # Reverse order of install, ignoring 'not found' so reruns are safe
   oc delete -f "$HERE/06-bootstrap-data.yaml" --ignore-not-found --wait=false
+  oc delete -f "$HERE/07-model-registry-rbac.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/04-workbench.yaml"      --ignore-not-found --wait=false
   oc delete -f "$HERE/05-dspa.yaml"           --ignore-not-found --wait=false
   oc delete -f "$HERE/03-data-connection.yaml" --ignore-not-found --wait=false
