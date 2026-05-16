@@ -162,8 +162,15 @@ nb01 = [
     md(
         "## 1.3 Distribuce částek",
         "",
-        "Klasická rychlá kontrola: log-stupnice, ať vidíme i extrémní hodnoty.",
-        "Pokud se v pravém ocasu objeví ostrá špička, je to obvykle první stopa.",
+        "Klasická rychlá kontrola: log-stupnice, ať uvidíme i extrémní hodnoty.",
+        "Distribuce je **vícemodálová** — to není anomálie, ale projev toho, že",
+        "každá nákladová kategorie má svůj typický rozsah (kancl ≠ marketing ≠",
+        "subdodávka). Z grafu by se daly chytit jen výrazné outliery vlevo a",
+        "vpravo; většina podezřelých faktur (kulaté částky, víkendové doklady,",
+        "chybějící PO) ale leží **uvnitř módů** a v 1D histogramu je neuvidíme.",
+        "",
+        "Proto v notebooku 02 trénujeme model nad celým feature space —",
+        "kombinace signálů, ne jediná osa.",
     ),
     code(
         "import matplotlib.pyplot as plt",
