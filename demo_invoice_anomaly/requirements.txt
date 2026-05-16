@@ -1,10 +1,5 @@
-# Python deps the notebooks need on top of the RHOAI minimal-gpu:3.4 image.
-# The minimal image ships JupyterLab + Python only; everything else we add here.
-pandas>=2.2,<3
-numpy>=1.26,<2
-scikit-learn>=1.4,<2
-matplotlib>=3.8,<4
+# Top-up packages on the RHOAI 3.4 Standard Data Science Notebook image
+# (odh-workbench-jupyter-datascience-cpu-py312-rhel9). That image already
+# ships pandas, numpy, scikit-learn, matplotlib, boto3, requests, joblib —
+# mlflow is the main one we still need to add for tracking + Model Registry.
 mlflow>=2.16,<3
-joblib>=1.4,<2
-boto3>=1.34,<2
-requests>=2.32,<3

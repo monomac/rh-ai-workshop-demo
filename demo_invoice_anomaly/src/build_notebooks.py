@@ -77,13 +77,14 @@ def write_notebook(name: str, cells: list[dict]) -> None:
 SETUP_MD = md(
     "## 0 · Setup prostředí",
     "",
-    "RHOAI _minimal-gpu_ image obsahuje JupyterLab + Python, ale ne pandas /",
-    "sklearn / mlflow. První spuštění proto doinstaluje balíčky z",
-    "`requirements.txt` (idempotentní — podruhé už nic nedělá).",
+    "Workbench běží na RHOAI _Standard Data Science Notebook_ image — pandas,",
+    "numpy, scikit-learn, matplotlib, boto3 už jsou předinstalované. Doinstaluje",
+    "se jen `mlflow` (kvůli logování parametrů a Model Registry).",
+    "Pip install je idempotentní; podruhé už nic nedělá.",
 )
 
 SETUP_CODE = code(
-    "# Doinstaluj závislosti pro tento notebook (cca 30 s při prvním spuštění).",
+    "# Doinstaluj doplňující závislosti (cca 10 s při prvním spuštění).",
     "%pip install -q -r ../requirements.txt",
 )
 
