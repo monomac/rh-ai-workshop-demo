@@ -19,13 +19,10 @@ metadata:
     openshift.io/display-name: "Invoice anomaly — workbench"
     opendatahub.io/username: "sp"
     notebooks.opendatahub.io/inject-oauth: "true"
-    # Dashboard hint — which "selectable image" this workbench corresponds to.
-    # The actual image is pinned in the container spec below; this annotation
-    # is cosmetic (controls the Dashboard's image-version dropdown). If the
-    # Dashboard shows "custom image", run on the cluster:
-    #   oc get imagestream -n redhat-ods-applications | grep -i datascience
-    # and replace the value below with that imagestream's name + :3.4 tag.
-    notebooks.opendatahub.io/last-image-selection: "jupyter-datascience:3.4"
+    # Match the RHOAI Dashboard's notion of "Jupyter | Data Science | CPU | Python 3.12 (3.4)".
+    # ImageStream name and git-commit verified against live sa-ai cluster on 2026-05-16.
+    notebooks.opendatahub.io/last-image-selection: "s2i-generic-data-science-notebook:3.4"
+    notebooks.opendatahub.io/last-image-version-git-commit-selection: "3a2ec4a"
 spec:
   template:
     spec:
@@ -33,10 +30,13 @@ spec:
       containers:
         - name: invoice-anomaly-wb
           # RHOAI 3.4 Standard Data Science Notebook — Jupyter + Python 3.12,
-          # pandas / numpy / sklearn / matplotlib / boto3 preinstalled.
-          # Digest matches RELATED_IMAGE_ODH_WORKBENCH_JUPYTER_DATASCIENCE_CPU_PY312_IMAGE
-          # in the cluster's rhods-operator 3.4 CSV → this IS the latest 3.4 build.
-          image: registry.redhat.io/rhoai/odh-workbench-jupyter-datascience-cpu-py312-rhel9@sha256:47ee99b94c4172f1d16ff968f3a67b2ca9f863af83e2e02446249f1ea357ae1f
+          # pandas / numpy / sklearn / matplotlib / boto3 / kfp preinstalled.
+          #
+          # Uses the in-cluster ImageStream tag so the workbench tracks
+          # whatever build is current for the :3.4 line — at the time of
+          # writing (2026-05-16) that's git commit 3a2ec4a, built 2026-05-01,
+          # digest sha256:d82680de0790b333892da2179c12225f5858f862b060964f2c62314cb23714fe.
+          image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:3.4
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: "1",  memory: 4Gi }
@@ -48,7 +48,7 @@ spec:
                 --ServerApp.password=''
                 --ServerApp.base_url=/notebook/rh-ai-workshop/invoice-anomaly-wb
             - name: JUPYTER_IMAGE
-              value: "odh-workbench-jupyter-datascience-cpu-py312-rhel9:3.4"
+              value: "s2i-generic-data-science-notebook:3.4"
             - name: MLFLOW_TRACKING_URI
               value: http://mlflow-server.rh-ai-workshop.svc.cluster.local:8080
             - name: MODEL_REGISTRY_URL
