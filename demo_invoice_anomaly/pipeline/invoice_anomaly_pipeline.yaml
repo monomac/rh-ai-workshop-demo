@@ -157,7 +157,7 @@ deploymentSpec:
           \ m in data.get(\"metrics\", [])}\n    roc = by_name.get(\"roc_auc\", 0)\n\
           \    decision = roc >= min_roc_auc\n    print(f\"roc_auc={roc:.3f}, threshold={min_roc_auc:.3f}\
           \ -> promote={decision}\")\n    return decision\n\n"
-        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
     exec-ingest-invoices:
       container:
         args:
@@ -196,7 +196,7 @@ deploymentSpec:
           \ \"wb\") as f:\n        f.write(body)\n    out_dataset.path = out_path\n\
           \    df = pd.read_csv(out_path)\n    print(f\"ingested {len(df)} rows from\
           \ s3://{s3_bucket}/{s3_key}\")\n\n"
-        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
     exec-register-model:
       container:
         args:
@@ -243,7 +243,7 @@ deploymentSpec:
           \  print(\"registry response:\", r.status_code, r.text[:200])\n        except\
           \ Exception as e:  # noqa: BLE001\n            print(\"registry call failed\
           \ (non-fatal):\", e)\n    return s3_uri\n\n"
-        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
     exec-train-model:
       container:
         args:
@@ -317,7 +317,7 @@ deploymentSpec:
           \    \"metrics\": metrics,\n        \"trained_on\": str(date.today()),\n\
           \    }, out_model.path)\n\n    for k, v in metrics.items():\n        out_metrics.log_metric(k,\
           \ v)\n    print(\"metrics:\", json.dumps(metrics, indent=2))\n\n"
-        image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
 pipelineInfo:
   description: "Tr\xE9nink a registrace modelu pro detekci anom\xE1li\xED ve faktur\xE1\
     ch."

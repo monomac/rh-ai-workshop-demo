@@ -25,8 +25,9 @@ spec:
       serviceAccountName: invoice-anomaly-wb
       containers:
         - name: invoice-anomaly-wb
-          # RHOAI 3.4 Standard Data Science Notebook (Python 3.11, pandas/sklearn/mlflow ready)
-          image: image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2
+          # RHOAI 3.4 Jupyter Data Science workbench — Python 3.12 / RHEL 9.
+          # Digest pinned to what is registered in the cluster's CSV.
+          image: registry.redhat.io/rhoai/odh-workbench-jupyter-datascience-cpu-py312-rhel9@sha256:47ee99b94c4172f1d16ff968f3a67b2ca9f863af83e2e02446249f1ea357ae1f
           imagePullPolicy: IfNotPresent
           resources:
             requests: { cpu: "1",  memory: 4Gi }
@@ -38,7 +39,7 @@ spec:
                 --ServerApp.password=''
                 --ServerApp.base_url=/notebook/rh-ai-workshop/invoice-anomaly-wb
             - name: JUPYTER_IMAGE
-              value: "s2i-generic-data-science-notebook:2024.2"
+              value: "odh-workbench-jupyter-datascience-cpu-py312-rhel9"
             - name: MLFLOW_TRACKING_URI
               value: http://mlflow-server.rh-ai-workshop.svc.cluster.local:8080
             - name: MODEL_REGISTRY_URL

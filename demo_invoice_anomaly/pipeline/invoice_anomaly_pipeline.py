@@ -20,7 +20,9 @@ from kfp import dsl, compiler
 from kfp.dsl import Input, Output, Dataset, Model, Metrics
 
 
-BASE_IMAGE = "image-registry.openshift-image-registry.svc:5000/redhat-ods-applications/s2i-generic-data-science-notebook:2024.2"
+# RHOAI 3.4 pipeline runtime — Python 3.12 / RHEL 9. Digest matches the
+# cluster CSV's RELATED_IMAGE_ODH_PIPELINE_RUNTIME_DATASCIENCE_CPU_PY312_IMAGE.
+BASE_IMAGE = "registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98"
 
 
 # ---------------------------------------------------------------------------
