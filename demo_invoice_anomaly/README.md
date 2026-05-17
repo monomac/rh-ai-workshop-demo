@@ -515,7 +515,7 @@ Spusť `notebooks/03_score_and_review.ipynb` (Run All). Verify per sekce:
 | 3.2 | `Flagnuto: N z 254`                                                          |
 | 3.3 | top-15 review queue v output                                                 |
 | 3.4 | `Online lookup pro 5 faktur: XX.X ms`, 5× `match=True`                       |
-| 3.5 | per-řádek log `[ X/25] Ys vendor → ...`, `vysvětlení` sloupec cituje historii |
+| 3.5 | per-řádek log `[ X/25] Ys row=N vendor → ...` (pořadí podle dokončení, ne podle queue indexu), 25 řádků ≈ 75-80 s s default `max_workers=5`, `vysvětlení` sloupec cituje historii |
 | 3.6 | `Review queue uložena do: ../data/review_queue_<datum>.csv` + S3             |
 | 3.7 | `Model version vytvořena: iforest-<sha> (id=N)`                              |
 

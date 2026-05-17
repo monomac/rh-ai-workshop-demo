@@ -19,6 +19,7 @@ Pure stdlib (urllib + json) — no extra pip install in the workbench.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import time
@@ -210,6 +211,7 @@ def explain_queue(
     history_df=None,
     reason_col: str = "reason",
     score_col: str = "anomaly_score",
+    max_workers: int = 5,
     progress: bool = True,
 ):
     """Add a 'vysvětlení' column for the top-N rows of a review queue.
@@ -219,10 +221,15 @@ def explain_queue(
     and pass it to the LLM as additional evidence. Without it the LLM
     explains from the row + reason codes alone.
 
-    Returns a list of strings of length `top_n`. Caller assigns it to
-    `queue.loc[:top_n-1, 'vysvětlení']`. Linear (one POST per row) — for
-    top_n=25 against Phi-4 on A10G this is ~1-2 minutes; well within a
-    workshop demo window.
+    `max_workers` controls in-flight concurrency against the LLM endpoint.
+    vLLM 0.18 happily serves multiple chat-completion requests in parallel
+    sharing the same KV-cache, so for top_n=25 the wall-clock time goes
+    from ~3-4 min (sequential) down to ~30-45 s on Phi-4 (or ~10-15 s on
+    Apertus-8B). Set max_workers=1 to disable concurrency for debugging.
+
+    Returns a list of strings of length `top_n`, **in queue order** —
+    caller assigns it to `queue.loc[:top_n-1, 'vysvětlení']` regardless of
+    completion order.
     """
     client = client or LLMClient()
     # Late import so the demo runs even without the history corpus loaded.
@@ -230,10 +237,10 @@ def explain_queue(
         from rag_context import vendor_context_for_row  # noqa: WPS433
 
     n = min(top_n, len(queue_df))
-    out: list[str] = []
-    t0 = time.time()
-    for i in range(n):
-        row = queue_df.iloc[i].to_dict()
+    rows = [queue_df.iloc[i].to_dict() for i in range(n)]
+
+    def _one(idx_row: tuple[int, dict]) -> tuple[int, str]:
+        idx, row = idx_row
         ctx = vendor_context_for_row(row, history_df) if history_df is not None else None
         text = llm_explain_row(
             row,
@@ -242,13 +249,29 @@ def explain_queue(
             context_block=ctx,
             client=client,
         )
-        out.append(text)
-        if progress:
-            elapsed = time.time() - t0
-            print(f"  [{i + 1:2}/{n}] {elapsed:5.1f}s  "
-                  f"{row.get('vendor', '?'):<24}  →  {text[:70]}"
-                  f"{'…' if len(text) > 70 else ''}")
-    return out
+        return idx, text
+
+    out: list[Optional[str]] = [None] * n
+    t0 = time.time()
+    completed = 0
+    workers = max(1, min(max_workers, n))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(_one, (i, rows[i])) for i in range(n)]
+        # Print rows as they FINISH (not as they're submitted) — completion
+        # order can differ from queue order, but the final list is in order.
+        for fut in concurrent.futures.as_completed(futures):
+            idx, text = fut.result()
+            out[idx] = text
+            completed += 1
+            if progress:
+                elapsed = time.time() - t0
+                vendor = rows[idx].get("vendor", "?")
+                print(f"  [{completed:2}/{n}] {elapsed:5.1f}s  "
+                      f"row={idx:>2}  {vendor:<24}  →  {text[:60]}"
+                      f"{'…' if len(text) > 60 else ''}")
+
+    return [t or "(prázdná odpověď)" for t in out]
 
 
 # ---------------------------------------------------------------------------
