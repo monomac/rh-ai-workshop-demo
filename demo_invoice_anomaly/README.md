@@ -98,6 +98,77 @@ v top-50** podezřelých faktur na synthetic datech.
 
 ## 3b · Feast feature store
 
+### Co je feature store laicky?
+
+Představ si **sdílený regál s kořením v podnikové kuchyni**. Každý kuchař
+(= ML model nebo skripts) má sahnout do toho samého kelímku, když recept
+říká "skořice". Bez společného regálu si každý kuchař dělá svoji skořici
+po svém — někdo z kůry, někdo z prášku — a výsledné koláče chutnají
+pokaždé jinak.
+
+Feature store je přesně tenhle regál pro **featury** — odvozené veličiny,
+které model používá k rozhodování. V našem demu to je devět veličin
+spočítaných z faktury (logaritmus částky, z-score vůči průměru v kategorii,
+příznak víkendu, frekvence dodavatele, …). Bez feature storu by je
+trénink a inference počítaly **každý zvlášť**, a jakákoli drobná nuance
+v jejich kódu by způsobila, že model **vidí jiné hodnoty v laboratoři
+a jiné v produkci** (technický termín: *train-serve skew*).
+
+S feature storem máme:
+
+- **Jeden katalog definic** — kdo featuru vymyslel, kdy, z jakých zdrojů,
+  jakou má TTL. Auditor se nemusí ptát "co je `amount_zscore_in_category`?",
+  najde si to v UI.
+- **Jedny hodnoty** — featuru spočítá *jednou* a v Feastu je uložená.
+  Trénink i inference si o ni řekne stejně.
+- **Časová pravda** — `event_timestamp` u každé hodnoty znamená, že na
+  otázku "co model viděl 10. dubna v 9:43?" existuje deterministická
+  odpověď. To je NIS2 / AI Act zlato.
+- **Rychlý lookup** v produkci — online store (u nás SQLite, v ostrém
+  provozu třeba Redis) odpoví na `get_online_features("INV-2025-08842")`
+  v desítkách milisekund. MLServer / KServe inference si může sáhnout
+  rovnou tam místo dostávat předpočítaný vektor v requestu.
+
+### Jak to využíváme v tomhle demu?
+
+Workflow je tří-krokový:
+
+1. **Definice v gitu.** `src/feast_repo/{entities,data_sources,feature_views}.py`
+   říká *co* jsou naše featury — pojmenování, typy, zdrojový parquet.
+   Operator si toto klonuje z `origin/main` a registruje (`feast apply`).
+2. **Materializace v notebooku 02 §2.2.** Spočteme 9 featur pro 4 019
+   tréninkových faktur, uložíme jako parquet a `feast materialize` to
+   nahraje do online storu. Od této chvíle jsou featury *queryable*.
+3. **Lookup v notebooku 03 §3.4 (a v produkční inference).**
+   `fs.get_online_features(features=[...], entity_rows=[{"invoice_id": x}])`
+   vrátí 9 čísel pro danou fakturu v milisekundách. Notebook 03 ukáže,
+   že hodnoty se přesně shodují s in-process výpočtem — ne náhodou.
+
+V workshop talk-tracku to obsluhuje slide-20 sloupce *reprodukovatelnost*
+(jeden katalog) a *compliance* (časová pravda + audit).
+
+### Co uvidíš v Dashboardu
+
+V levém menu **Develop & train → Feature store** se objeví sedm záložek
+(po setupu z `deploy/09-feature-store.yaml`). Co která ukazuje:
+
+| Záložka            | Co je tam                                                                  |
+|--------------------|----------------------------------------------------------------------------|
+| **Overview**       | Karta projektu `invoice_anomaly` s souhrnem počtů entit / FV / features.   |
+| **Entities**       | `invoice_id` — naše entitní klíče. Říká "feature je vždycky vázaná k jedné faktuře". |
+| **Data sources**   | `invoice_features_source` — parquet, ze kterého featury pocházejí (s cestou k MinIO). |
+| **Datasets**       | Saved snapshoty training datasetů; v našem demu prázdné — featury bereme rovnou z `data sources`. |
+| **Features**       | Devět jednotlivých veličin: `log_amount`, `amount_zscore_in_category`, `is_weekend`, `is_holiday`, `missing_po`, `vendor_frequency`, `round_sum_flag`, `days_to_due`, `category_idx`. Klikem na featuru uvidíš metadata, typ, TTL. |
+| **Feature views**  | `invoice_features` — view které featury sbalí dohromady (vždycky se publikují jako celek, ne po jedné). |
+| **Feature services** | Vyšší abstrakce pro produkci — sada feature views, kterou konkrétní model konzumuje. Pro slide-20 demo to nepotřebujeme; v ostrém nasazení by tam byla služba např. `invoice-fraud-online-v1`. |
+
+Pro workshop demo stačí ukázat **Overview → Entities → Features → Feature
+views** a říct: "tohle je ten katalog, který trénink i produkční inference
+sdílejí." Auditor pak ví, kde se podívat, který model viděl jaké featury
+v jakou dobu.
+
+### Technické pozadí (pro adminy)
+
 Feast je v `demo_invoice_anomaly` druhou platformní službou vedle MLflow —
 RHOAI 3.4 ho provozuje přes DSC komponentu `feastoperator` (`Managed`).
 Operator stahuje feature definice z gitu, registruje je a vystavuje online
