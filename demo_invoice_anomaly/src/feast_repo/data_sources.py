@@ -1,9 +1,19 @@
 """Feast data sources for the invoice-anomaly demo.
 
-Single offline source: a parquet of *already-computed* feature values living
-in MinIO. The training notebook (02) writes this parquet once, the Feast SDK
-reads it for both historical joins (training) and materialization into the
-online store (serving).
+Single offline source: a parquet of *already-computed* feature values
+sitting next to the feast project (`feast_repo/data/invoice_features.parquet`).
+The training notebook (02) writes the parquet, the Feast SDK reads it for
+both historical joins (training) and materialization into the online store
+(serving).
+
+Why local-path instead of `s3://...`?
+- Feast's Dask offline engine reads parquet via fsspec, which needs `s3fs`
+  for s3:// URIs. The RHOAI workbench image doesn't ship s3fs, and adding
+  a runtime pip-install in a workshop notebook is a portability tripwire.
+- The operator-side `feast apply` doesn't read data, just records the
+  schema, so the path string doesn't have to be operator-reachable.
+- Notebook 02 writes the parquet to S3/MinIO *and* to the local feast_repo
+  path: S3 for cross-environment audit, local for Feast offline reads.
 
 Why pre-computed and not OnDemandFeatureView?
 - IsolationForest needs a tiny number of fitted lookup tables (vendor
@@ -15,29 +25,26 @@ Why pre-computed and not OnDemandFeatureView?
   registry, point-in-time guarantees, and online serving.
 """
 
-import os
-
 from feast import FileSource
 from feast.data_format import ParquetFormat
 
-# The path to the feature parquet. Two environments read it:
-#   - Operator-side `feast apply` only needs the path string to register it;
-#     it does NOT read data at apply time.
-#   - Workbench-side `feast get-historical-features` reads the parquet over
-#     S3/MinIO. The AWS_S3_ENDPOINT env (from the Data Connection) is passed
-#     through `s3_endpoint_override` so the MinIO HTTP endpoint is used
-#     instead of `https://s3.amazonaws.com`.
-_BUCKET = os.environ.get("AWS_S3_BUCKET", "rhoai-workshop-invoices")
-_FEAST_PARQUET_KEY = "feast/invoice_features.parquet"
+# Resolved relative to wherever `feast apply` is invoked — for the workbench
+# that's src/feast_repo/, so this becomes src/feast_repo/data/invoice_features.parquet
+# (the same `data/` dir as the sqlite registry + online store). Operator does
+# its own thing with /feast-data/ and never reads this path at apply time.
+LOCAL_PARQUET_PATH = "data/invoice_features.parquet"
 
 invoice_features_source = FileSource(
     name="invoice_features_source",
-    path=f"s3://{_BUCKET}/{_FEAST_PARQUET_KEY}",
+    path=LOCAL_PARQUET_PATH,
     file_format=ParquetFormat(),
     timestamp_field="event_timestamp",
-    s3_endpoint_override=os.environ.get("AWS_S3_ENDPOINT") or None,
     description=(
         "Per-invoice feature vectors written by notebook 02 / the training "
-        "pipeline. One row per invoice_id, event_timestamp = issued_on."
+        "pipeline. One row per invoice_id, event_timestamp = issued_on. "
+        "Mirrored to s3://$AWS_S3_BUCKET/feast/invoice_features.parquet for "
+        "audit and cross-environment access; the FileSource here points at "
+        "the local copy because Feast's Dask offline engine needs s3fs to "
+        "talk to S3 and the workbench image doesn't ship it."
     ),
 )

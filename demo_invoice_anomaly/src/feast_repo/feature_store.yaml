@@ -7,21 +7,27 @@
 #   2. The workbench, which can drop into this directory and run `feast apply`
 #      or `feast get-historical-features` directly for development.
 #
+# Paths are RELATIVE — operator rewrites this file with absolute
+# /feast-data/ paths (verified against feast-sample-git/credit_scoring_local
+# pod), so what we put here matters only for the workbench. From the
+# workbench we run `feast apply` with cwd=src/feast_repo, so `data/registry.db`
+# resolves to src/feast_repo/data/registry.db on the workbench PVC. That
+# directory is gitignored.
+#
 # Stores:
-#   - registry: local SQLite file on /feast-data (server PVC). Operator
-#     runs feast apply on init, so the registry is populated from the .py
-#     files alongside this file.
-#   - online_store: SQLite file on the same PVC. Easy, zero-ops, fine for
+#   - registry: local SQLite file. Operator runs feast apply on init,
+#     populating the registry from the .py files alongside this file.
+#   - online_store: SQLite file on the same dir. Easy, zero-ops, fine for
 #     ~thousands of features at workshop scale. Graduate to Redis or
 #     Postgres for production.
 #   - offline_store: file provider — FileSources point at S3/MinIO paths
 #     via the s3_endpoint_override kwarg in data_sources.py.
 project: invoice_anomaly
 provider: local
-registry: /feast-data/registry.db
+registry: data/registry.db
 online_store:
   type: sqlite
-  path: /feast-data/online_store.db
+  path: data/online_store.db
 offline_store:
   type: file
 entity_key_serialization_version: 3
