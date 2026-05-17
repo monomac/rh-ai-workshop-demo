@@ -13,7 +13,7 @@
 | 1 | **Rychlejší prototypování**              | `notebooks/01_explore_invoices.ipynb` — od nuly k první vizualizaci v 5 buňkách.                   |
 | 2 | **Self-service pro analytiky**           | Notebook 02 má parametry v top-level buňce; doménový expert je tweakuje bez vývojáře.              |
 | 3 | **Reprodukovatelnost a sdílení**         | `src/invoice_features.py` (1 funkce pro train i score) + MLflow run ID + Git-friendly .ipynb + **Feast feature store** (`src/feast_repo/`) jako platformně vynucený single-source-of-truth pro definice featur — git je zdroj, RHOAI feastoperator zaregistruje. |
-| 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`) a navíc **LLM vysvětlovačem** (Phi-4 v `model-test`, OpenAI-kompatibilní API) — controller dostane jedno-větné česky znějící zdůvodnění u každé top-25 podezřelé faktury. |
+| 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`), **LLM vysvětlovačem** (Phi-4 v `model-test`, OpenAI-kompatibilní API), a **RAG kontextem** přes vendor history (`src/rag_context.py`) — controller dostane konkrétní zdůvodnění "obvykle 27 000 Kč, dnes 1 240 000 Kč = 45× nad medián", ne abstraktní "podezřele vysoká částka". |
 | 5 | **AI quickstart pattern**                | Celé repo je quickstartovatelná šablona: `deploy/install.sh` postaví prostředí (vč. MLServer ServingRuntime), `pipeline/run_pipeline.sh` spustí trénink+registraci jedním příkazem, "Deploy" v Model Registry vystaví model jedním kliknutím. |
 | 6 | **Auditovatelnost a compliance**         | Feast registry (definice featur, kdo a kdy) → MLflow run (notebook trénink) → Model Registry verze (kdo schválil) → DS Pipelines run (kdy běželo automaticky) → KServe InferenceService (kdy a kdo deploynul do produkce) → Feast online store (snapshot featur k danému timestampu) → versionovaný S3 klíč (immutable bytes). Plná evidence pro NIS2 / AI Act, včetně "co model viděl, když rozhodoval". |
 
@@ -33,6 +33,7 @@ demo_invoice_anomaly/
 │   ├── generate_invoices.py           # generátor — pokud chceš jiný objem nebo seed
 │   ├── invoice_features.py            # SDÍLENÉ featury (train == score)
 │   ├── explain_with_llm.py            # LLM vysvětlovač — OpenAI-kompatibilní klient (stdlib)
+│   ├── rag_context.py                 # RAG-lite — vendor_history retrieval + CZ prompt format
 │   ├── feast_io.py                    # Feast helpers — apply / materialize / parquet write
 │   ├── feast_repo/                    # Feast project (čte feastoperator i workbench)
 │   │   ├── feature_store.yaml         # local provider, sqlite online, file offline
@@ -255,12 +256,23 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
    v Open Inference Protocol v2. **Nikdo nepsal řádku Python** mezi
    "model je zaregistrovaný" a "model je v produkci".
 
-7. **"A teď ať mi to model vysvětlí česky."** → V notebooku 03 §3.4
-   běží LLM vysvětlovač (`src/explain_with_llm.py`). Pro top-25 podezřelých
-   řádků posílá per-row request na `phi-4-quantizedw8a8-version-1` v
-   namespace `model-test` (vLLM, OpenAI-kompatibilní `/v1/chat/completions`).
+7. **"A teď ať mi to model vysvětlí česky — a navíc s kontextem historie."** →
+   V notebooku 03 §3.5 běží LLM vysvětlovač (`src/explain_with_llm.py`)
+   plus RAG-lite nad vendor historií (`src/rag_context.py`). Pro top-25
+   podezřelých řádků posílá per-row request na `phi-4-quantizedw8a8-version-1`
+   v namespace `model-test` (vLLM, OpenAI-kompatibilní `/v1/chat/completions`).
    Endpoint je v env varech workbenche (`LLM_ENDPOINT`, `LLM_MODEL` —
    viz `deploy/04-workbench.yaml`), takže notebook si ho jen vyzvedne.
+
+   **RAG-lite pattern** — retrieval = `df[df.vendor == X]` přes tréninkový
+   set; augment = `format_history_for_prompt` shrne historii do kompaktního
+   českého bloku (medián, rozpětí, typická kategorie, ratio bez-PO /
+   o-víkendu / kulatých částek, multiple-of-median); generate = Phi-4
+   dostane řádek + reason codes + tenhle blok a může citovat konkrétní
+   čísla. Bez kontextu LLM píše obecně ("vysoká částka"), s kontextem
+   konkrétně ("45× nad medián, vendor obvykle v kategorii facility, ne IT").
+   Workshop pointa: tabulkový retrieval má stejnou architekturu jako vector
+   RAG, jen jiné retrieval primitivum.
 
    - Systémový prompt v češtině zakazuje halucinace mimo dodaná data:
      LLM dostane řádek faktury + reason codes + anomaly score, vrací
@@ -291,10 +303,18 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
   - Multi-model serving přes ModelMesh (pro shop s tisíci modely).
   - A/B test mezi novou a starou verzí přes Knative traffic-splitting.
 - ~~LLM-vysvětlovač "Proč právě tohle podezření?"~~ — **už součást demo**
-  (beat 7, notebook 03 §3.4, Phi-4 W8A8 v `model-test`).
+  (beat 7, notebook 03 §3.5, Phi-4 W8A8 v `model-test`).
+- ~~RAG: nasypat do LLM kontextu i historii faktur od stejného dodavatele~~ —
+  **už součást demo** (notebook 03 §3.5 přes `src/rag_context.py`, retrieval
+  = vendor filtr nad tréninkovým setem, augment = strukturované shrnutí
+  do prompt-u).
 - Feedback loop: controller označí false positive → next run snižuje váhu.
-- RAG: nasypat do LLM kontextu i historii faktur od stejného dodavatele,
-  aby vysvětlení rovnou cituovalo "pětkrát jste platili pod 50 k, teď 1 M".
+- **Vector RAG nad fakturními popisy** — když do faktur přidáme `description`
+  (volný text z PDF / ERP), můžeme retrieval rozšířit z `vendor == X` na
+  sémantické "podobné popisy v minulosti" (embeddings + pgvector / Qdrant /
+  Milvus). To je upgrade na "skutečnou" RAG architekturu, stejný kód-tvar
+  v notebooku — jen `retriever.search(query_text, k=8)` místo dataframe
+  filtru.
 - **Pipeline (KFP) integrace s Feast** — `ingest_invoices` komponenta čte
   z Feast historical join místo z CSV, `register_model` taky materializuje
   do online store. Notebooks 02/03 už to dělají; pipeline je deferred,
@@ -307,7 +327,140 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 
 ---
 
-## 7 · Troubleshooting
+## 7 · End-to-end test (dry-run před workshopem)
+
+Po `install.sh` projeď tohle všech 7 beats slide-20 talk-tracku. Trvá
+celkem **~15-20 minut**; ověříš tím všechny integrace najednou.
+
+### Pre-flight (1 min, terminál)
+
+```bash
+# Workbench Ready + env vars
+oc -n rh-ai-workshop get pod invoice-anomaly-wb-0 \
+  -o jsonpath='{range .spec.containers[?(@.name=="invoice-anomaly-wb")].env[*]}{.name}={.value}{"\n"}{end}' \
+  | grep -E '^(LLM_|FEAST_|MODEL_REGISTRY_URL|AWS_S3)'
+
+# LLM IS Ready (Phi-4)
+oc -n model-test get inferenceservice phi-4-quantizedw8a8-version-1
+
+# FeatureStore Ready + visible to Dashboard backend
+oc -n rh-ai-workshop get featurestore invoice-anomaly
+oc -n redhat-ods-applications exec deploy/rhods-dashboard -c rhods-dashboard -- \
+  curl -sS -H "X-Forwarded-Access-Token: $(oc whoami -t)" \
+  http://localhost:8080/api/featurestores | python3 -m json.tool
+
+# Model registry reachable + has invoice-anomaly-detector
+oc -n rh-ai-workshop exec invoice-anomaly-wb-0 -c invoice-anomaly-wb -- bash -c '
+  TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+  curl -sS --cacert /etc/pki/tls/custom-certs/ca-bundle.crt \
+    -H "Authorization: Bearer $TOKEN" \
+    "$MODEL_REGISTRY_URL/api/model_registry/v1alpha3/registered_models?pageSize=10" \
+  | python3 -c "import json,sys;d=json.load(sys.stdin);[print(\"  id=\"+m[\"id\"],m[\"name\"]) for m in d.get(\"items\",[])]"'
+```
+
+Všechno musí vrátit Ready / non-empty. Pokud ne → §7 Troubleshooting.
+
+### Beat 1 — Controllerova ranní inbox (30 s)
+
+Otevři **`demo_invoice_anomaly/data/sample_review_queue.csv`** (committed
+snapshot). To je výstup, který by controller dostal e-mailem.
+**Verify:** 25 řádků, sloupce `vendor`, `amount_czk`, `anomaly_score`, `reason`.
+
+### Beat 2 — Notebook 01 exploration (2 min)
+
+Dashboard → Projects → **RH AI Workshop — Invoice Anomaly Demo** → otevři
+workbench. Spusť `notebooks/01_explore_invoices.ipynb` (Run All).
+**Verify:** 13 buněk doběhne, distribuce a kategorie se vykreslí.
+
+### Beat 3 — Notebook 02 trénink + Feast publikace (3-5 min)
+
+Spusť `notebooks/02_train_model.ipynb` (Run All). Verify per sekce:
+
+| §   | Verify line                                                                |
+|-----|----------------------------------------------------------------------------|
+| 2.1 | `Trénovací data: 4 019 faktur`, `Shape: (4019, 9)`                         |
+| 2.2 | `feature parquet: 4019 rows × 11 cols`; `feast apply` → No changes; `push 4,019 rows`; online lookup vrátí 9 features |
+| 2.3 | trénink hotov                                                              |
+| 2.4 | ROC-AUC ≈ 0.957, PR-AUC ~ 0.95                                             |
+| 2.5 | `MLflow run logged: <run_id>`                                              |
+| 2.6 | `Model uložen i do S3 bucketu`                                             |
+
+### Beat 4 — Audit trail trojúhelník (1 min)
+
+Tři tab refreshe v Dashboardu + jeden terminál v JupyterLab:
+
+- `feast feature-views list` (v `src/feast_repo/`) → vypíše `invoice_features`.
+- **MLflow** v levém menu → experiment `invoice-anomaly` → nový run je tam s params/metrics.
+- **Models → Model registry → invoice-anomaly-detector** → seznam verzí (pipeline + notebook + nová).
+- **Develop & train → Feature store → invoice_anomaly** → Entities `invoice_id`, Data sources, Features (9), Feature views.
+
+### Beat 5 — Live pipeline (3-5 min)
+
+Z laptop terminálu:
+
+```bash
+cd "~/Documents/Claude/Projects/Prepare RH AI workshop"
+./demo_invoice_anomaly/pipeline/run_pipeline.sh
+```
+
+Script vypíše Dashboard URL — klik → **Data Science Pipelines → Runs**.
+**Verify:** DAG `ingest → train → evaluate → promote → register`
+postupně rozsvícený. Po dokončení Model Registry ukáže novou verzi
+`pipeline-<UTC>` s `customProperties.source=data-science-pipelines`.
+
+### Beat 6 — Deploy z Model Registry (1-2 min)
+
+Model Registry → klik na nejnovější `pipeline-<UTC>` → **Deploy model** →
+projekt `rh-ai-workshop`. Wizard:
+
+| Step                 | Pole                  | Hodnota                                                       |
+|----------------------|-----------------------|---------------------------------------------------------------|
+| 1 Model details      | Model location        | Existing connection                                           |
+|                      | Connection            | `aws-connection-rhoai-invoices` (MinIO — invoices bucket)     |
+|                      | Path                  | `models/invoice-anomaly-detector/<UTC>/` (z `s3_uri` props)   |
+|                      | Model type            | **Predictive model**                                          |
+| 2 Model deployment   | Framework / runtime   | **sklearn - 1** / MLServer                                    |
+| 3 Advanced settings  | (defaulty)            |                                                               |
+| 4 Review             | Submit                |                                                               |
+
+**Verify:** Project → Models tab — nová karta Loading → Available za ~30-60 s.
+Smoke test:
+
+```bash
+PRED=http://<is-name>-predictor.rh-ai-workshop.svc.cluster.local:8080
+curl -sS "$PRED/v2/models/<is-name>/infer" -H "Content-Type: application/json" \
+  -d '{"inputs":[{"name":"x","shape":[1,9],"datatype":"FP64",
+                  "data":[[13.5,7.2,1,1,1,1,0,5,3]]}]}'
+# → 1 (normal) nebo -1 (anomaly)
+```
+
+### Beat 7 — Notebook 03: review queue + Feast online + LLM s RAG (3-4 min)
+
+Spusť `notebooks/03_score_and_review.ipynb` (Run All). Verify per sekce:
+
+| §   | Verify line                                                                  |
+|-----|------------------------------------------------------------------------------|
+| 3.1 | Model loaded, ROC-AUC = 0.957; new_df 254 faktur                             |
+| 3.2 | `Flagnuto: N z 254`                                                          |
+| 3.3 | top-15 review queue v output                                                 |
+| 3.4 | `Online lookup pro 5 faktur: XX.X ms`, 5× `match=True`                       |
+| 3.5 | per-řádek log `[ X/25] Ys vendor → ...`, `vysvětlení` sloupec cituje historii |
+| 3.6 | `Review queue uložena do: ../data/review_queue_<datum>.csv` + S3             |
+| 3.7 | `Model version vytvořena: iforest-<sha> (id=N)`                              |
+
+---
+
+### Co dělat když něco zaškobrtne
+
+- **Notebook nevidí AWS_S3_BUCKET** → bounce workbench pod (`oc -n rh-ai-workshop delete pod invoice-anomaly-wb-0`).
+- **LLM timeout / nedostupný** → `oc -n model-test get inferenceservice phi-4-quantizedw8a8-version-1` (READY=True?). Cold-start ~6-8 min po restartu.
+- **Feast UI prázdná** → frontend cache, hard refresh (Cmd+Shift+R) nebo incognito.
+- **Deploy stuck na Loading** → `oc -n rh-ai-workshop describe inferenceservice <name>` — typicky storage-initializer connect-refused (KServe annotace na data connection chybí, viz §7).
+- **Pipeline `register-model` HTTP 403** → SA `pipeline-runner-dspa` chybí v `deploy/07-model-registry-rbac.yaml`.
+
+---
+
+## 8 · Troubleshooting
 
 | Problém                                                | Řešení                                                                                  |
 |--------------------------------------------------------|------------------------------------------------------------------------------------------|
@@ -340,4 +493,5 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 | `feast materialize` selže s `ImportError: Install s3fs to access S3` | Workbench image nemá `s3fs`. FileSource v `data_sources.py` proto pointuje na **lokální** parquet (`data/invoice_features.parquet`, vedle feast_repo). Notebook 02 §2.2 píše parquet jak lokálně (pro Feast) tak na S3 (pro audit + cross-env). Pokud potřebuješ s3:// FileSource, doplň `pip install s3fs --break-system-packages` do setupu. |
 | Online lookup je rychlý, ale hodnoty se neshodují s in-process compute | Pravděpodobně se změnily lookup tabulky (`category_index` / `vendor_freq_table`) — model byl natrénovaný se starou sadou, novou dávku jsi spočítal s aktuální. Fix: `write_feature_parquet(new_df, artifact=artifact, ...)` v §3.4 notebooku 03 — předáváš modelové lookups, ne re-computed. |
 | `feast feature-views list` na clusteru ukazuje 0 FV, i když operator je Ready | Operator klonuje git, ale `runFeastApplyOnInit: false` byl omylem nastavený, nebo feature_views.py má syntax error. `oc logs deploy/feast-invoice-anomaly` ukáže traceback z `feast apply`. |
+| Dashboard → Feature Store overview říká "No feature stores are available to users in your organization" i když je FS Ready | Dashboard backend (`backend/dist/routes/api/featurestores/featureStoreUtils.js`) má tři tvrdé podmínky: (1) FS CR musí mít label **`feature-store-ui: enabled`** — `filterEnabledCRDs` vyřazuje vše ostatní; (2) `spec.services.registry.local.server: {}` na CR aby vznikl registry server pod + client ConfigMap s `registry:` blokem; (3) **`server.restAPI: true`** — bez něj operator postaví jen gRPC server a Dashboard dostane `grpc-status: 2 Bad method header`. `deploy/09-feature-store.yaml` v repu všechny tři má. Pokud UI pořád ukazuje "no feature stores" po `oc apply`, je to skoro jistě frontend cache — hard refresh (Cmd+Shift+R) nebo incognito okno. Backend dotaz ověříš: `oc -n redhat-ods-applications exec deploy/rhods-dashboard -c rhods-dashboard -- curl -sS -H "X-Forwarded-Access-Token: $(oc whoami -t)" http://localhost:8080/api/featurestores` — měl by vrátit JSON s tvým FS. |
 | Dashboard ukazuje **"Outdated KServe runtime"** u LLM IS | Project-scoped `ServingRuntime` byl naklonován z template, když template ještě měl starší verzi vLLM. Template se mezitím updatoval (`opendatahub.io/runtime-version`), tvoje SR ne. Diff projeď přes `oc -n model-test get servingruntime <name> -o yaml` vs `oc -n redhat-ods-applications get template vllm-cuda-runtime-template -o yaml` — typicky se mění jen `containers[0].image` a anotace. Patch: `oc -n model-test patch servingruntime <name> --type=json -p='[{"op":"replace","path":"/spec/containers/0/image","value":"<new-image>"},{"op":"replace","path":"/metadata/annotations/opendatahub.io~1runtime-version","value":"v<new>"}]'`. Deployment udělá rolling update — starý pod běží dokud nový nepasuje readiness, takže LLM endpoint zůstane funkční po celou dobu cold pullu (~5-7 min). |

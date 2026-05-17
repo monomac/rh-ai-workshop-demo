@@ -45,7 +45,10 @@ SYSTEM_PROMPT = (
     "proč právě tato faktura vyšla jako podezřelá. "
     "Odpověz MAXIMÁLNĚ třemi krátkými větami v jednom odstavci — bez odrážek "
     "a bez výčtu za prvé / za druhé. "
-    "Argumentuj VÝHRADNĚ údaji z dodaných důvodových kódů a hodnot ve faktuře. "
+    "Argumentuj VÝHRADNĚ údaji z dodaných důvodových kódů, hodnot ve faktuře, "
+    "a (pokud je k dispozici) historie dodavatele. "
+    "Pokud máš k dispozici historii, OPŘI vysvětlení o konkrétní čísla z ní — "
+    "například dodavatel X obvykle účtuje 35 000 Kč, dnes 1 240 000 Kč. "
     "Nevymýšlej si nic, co ve vstupu není. Žádné rady, žádné doporučení akcí — "
     "jen popis důvodu podezření. Anomaly score je v rozsahu 0..1, kde vyšší = "
     "vyšší podezření z anomálie."
@@ -118,9 +121,16 @@ class LLMClient:
 
 
 def _format_row_for_prompt(row: dict, anomaly_score: float,
-                           reason_codes: Iterable[str]) -> str:
+                           reason_codes: Iterable[str],
+                           context_block: Optional[str] = None) -> str:
     """Render one invoice row + its deterministic reasons as a compact CZ
-    bullet block. Keeping it short = cheaper tokens + less room to drift."""
+    bullet block. Keeping it short = cheaper tokens + less room to drift.
+
+    `context_block`, if given, is RAG-style retrieved context (typically a
+    vendor-history summary from `rag_context.format_history_for_prompt`).
+    It's appended below the invoice fields so the model knows it's
+    additional evidence, not part of the current row.
+    """
     rc = list(reason_codes)
     rc_block = "\n".join(f"  - {c}" for c in rc) if rc else "  - (žádné)"
     # Only print fields a controller would actually look at — avoids the model
@@ -130,11 +140,14 @@ def _format_row_for_prompt(row: dict, anomaly_score: float,
     fields = "\n".join(
         f"  - {k}: {row[k]}" for k in cared if k in row and row[k] not in (None, "")
     )
-    return (
-        f"Faktura:\n{fields}\n"
-        f"Anomaly score: {anomaly_score:.3f}\n"
-        f"Důvodové kódy (deterministické):\n{rc_block}"
-    )
+    parts = [
+        f"Faktura:\n{fields}",
+        f"Anomaly score: {anomaly_score:.3f}",
+        f"Důvodové kódy (deterministické):\n{rc_block}",
+    ]
+    if context_block:
+        parts.append(context_block)
+    return "\n".join(parts)
 
 
 def _split_reason_codes(reason: str) -> list[str]:
@@ -156,16 +169,21 @@ def llm_explain_row(
     reason_codes: Iterable[str],
     *,
     client: Optional[LLMClient] = None,
+    context_block: Optional[str] = None,
     max_tokens: int = 220,
     temperature: float = 0.2,
 ) -> str:
     """Return a 2-3 sentence Czech explanation for one flagged invoice.
 
+    `context_block` is optional RAG-style retrieved context. Typically a
+    vendor history summary from `rag_context.vendor_context_for_row`.
+    When given, the LLM grounds its explanation in those concrete numbers.
+
     Defensive: any backend error returns a short fallback string instead of
     raising — the demo notebook should keep moving even if the LLM is down.
     """
     client = client or LLMClient()
-    user = _format_row_for_prompt(row, anomaly_score, reason_codes)
+    user = _format_row_for_prompt(row, anomaly_score, reason_codes, context_block)
     try:
         resp = client.chat(
             messages=[
@@ -189,11 +207,17 @@ def explain_queue(
     *,
     top_n: int = 25,
     client: Optional[LLMClient] = None,
+    history_df=None,
     reason_col: str = "reason",
     score_col: str = "anomaly_score",
     progress: bool = True,
 ):
     """Add a 'vysvětlení' column for the top-N rows of a review queue.
+
+    If `history_df` is given (the vendor history corpus, typically the
+    training-set invoices), we compute a RAG-style vendor summary per row
+    and pass it to the LLM as additional evidence. Without it the LLM
+    explains from the row + reason codes alone.
 
     Returns a list of strings of length `top_n`. Caller assigns it to
     `queue.loc[:top_n-1, 'vysvětlení']`. Linear (one POST per row) — for
@@ -201,15 +225,21 @@ def explain_queue(
     workshop demo window.
     """
     client = client or LLMClient()
+    # Late import so the demo runs even without the history corpus loaded.
+    if history_df is not None:
+        from rag_context import vendor_context_for_row  # noqa: WPS433
+
     n = min(top_n, len(queue_df))
     out: list[str] = []
     t0 = time.time()
     for i in range(n):
         row = queue_df.iloc[i].to_dict()
+        ctx = vendor_context_for_row(row, history_df) if history_df is not None else None
         text = llm_explain_row(
             row,
             anomaly_score=float(row.get(score_col, 0.0) or 0.0),
             reason_codes=_split_reason_codes(row.get(reason_col, "")),
+            context_block=ctx,
             client=client,
         )
         out.append(text)

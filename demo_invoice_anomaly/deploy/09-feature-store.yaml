@@ -27,6 +27,11 @@ metadata:
   labels:
     app: invoice-anomaly
     opendatahub.io/dashboard: "true"
+    # REQUIRED for the RHOAI Dashboard's "Feature store" UI to surface this
+    # FS. Backend filterEnabledCRDs() in odh-dashboard explicitly excludes
+    # any CR without this label, so without it the UI lists 0 items even
+    # though the operator is Ready and RBAC is fine.
+    feature-store-ui: enabled
 spec:
   feastProject: invoice_anomaly
   # The operator clones this repo on init and runs `feast apply` against
@@ -43,11 +48,22 @@ spec:
     # Local file registry on the PVC — same DB the in-cluster online server
     # reads. Workbench uses a separate local registry; both are populated
     # from the same feast_repo/ source files.
+    #
+    # The registry server is exposed for the Dashboard UI. Two flags are
+    # REQUIRED — the operator otherwise stands up a gRPC-only server and
+    # the Dashboard's REST client gets "grpc-status: 2 Bad method header":
+    #   - `server: {}` to enable the registry server container (default off).
+    #   - `restAPI: true` to ALSO expose REST on port 6573 + spin up a
+    #     companion Service `feast-<name>-registry-rest`. Dashboard backend
+    #     parses the gRPC URL from the client ConfigMap, swaps `-registry`
+    #     → `-registry-rest` to find the REST endpoint, and proxies to it.
     registry:
       local:
         persistence:
           file:
             path: /feast-data/registry.db
+        server:
+          restAPI: true
     # SQLite online store on the PVC. Plenty for workshop scale; trivially
     # swappable for Redis / Postgres later (operator CRD supports both).
     onlineStore:
