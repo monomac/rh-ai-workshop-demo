@@ -14,8 +14,8 @@
 | 2 | **Self-service pro analytiky**           | Notebook 02 má parametry v top-level buňce; doménový expert je tweakuje bez vývojáře.              |
 | 3 | **Reprodukovatelnost a sdílení**         | `src/invoice_features.py` (1 funkce pro train i score) + MLflow run ID + Git-friendly .ipynb.      |
 | 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`).                  |
-| 5 | **AI quickstart pattern**                | Celé repo je quickstartovatelná šablona — `install.sh`, `pipeline/`, `deploy/`. Stáhneš → spustíš. |
-| 6 | **Auditovatelnost a compliance**         | MLflow → Model Registry → DS Pipeline + verzovaný S3 klíč. Plná evidence pro NIS2 / AI Act.        |
+| 5 | **AI quickstart pattern**                | Celé repo je quickstartovatelná šablona: `deploy/install.sh` postaví prostředí (vč. MLServer ServingRuntime), `pipeline/run_pipeline.sh` spustí trénink+registraci jedním příkazem, "Deploy" v Model Registry vystaví model jedním kliknutím. |
+| 6 | **Auditovatelnost a compliance**         | MLflow run (notebook trénink) → Model Registry verze (kdo schválil) → DS Pipelines run (kdy běželo automaticky) → KServe InferenceService (kdy a kdo deploynul do produkce) → versionovaný S3 klíč (immutable bytes). Plná evidence pro NIS2 / AI Act. |
 
 ---
 
@@ -38,16 +38,18 @@ demo_invoice_anomaly/
 │   ├── 02_train_model.ipynb           # trénink Isolation Forest + MLflow
 │   └── 03_score_and_review.ipynb      # skórování + review queue + Model Registry
 ├── pipeline/
-│   ├── invoice_anomaly_pipeline.py    # KFP v2 DSL
-│   └── invoice_anomaly_pipeline.yaml  # zkompilovaný pipeline (upload do RHOAI)
+│   ├── invoice_anomaly_pipeline.py    # KFP v2 DSL — zdroj pravdy
+│   ├── invoice_anomaly_pipeline.yaml  # zkompilovaný pipeline (commit i tady)
+│   └── run_pipeline.sh                # one-command live trigger pro workshop
 └── deploy/                            # OpenShift manifesty pro sa-ai cluster
     ├── 01-namespace.yaml
     ├── 02-minio.yaml
-    ├── 03-data-connection.yaml
+    ├── 03-data-connection.yaml         # S3 connection secret (+ KServe annotace pro "Deploy")
     ├── 04-workbench.yaml               # workbench Notebook CR + SA + PVC + env (vč. MODEL_REGISTRY_URL)
     ├── 05-dspa.yaml
     ├── 06-bootstrap-data.yaml
     ├── 07-model-registry-rbac.yaml     # cross-ns RoleBinding → registry-user-elos-model-registry
+    ├── 08-serving-runtime.yaml         # MLServer ServingRuntime — povolí "Deploy" z Model Registry
     └── install.sh
 ```
 
@@ -104,9 +106,14 @@ oc login --server=https://api.sa-ai.<base-domain>:6443 -u sp
 #    - clone tohle repo dovnitř (`git clone …` v terminálu workbenche)
 #    - otevři notebooks/ a spusť 01 → 02 → 03
 
-# 4. nahraj pipeline
-oc -n rh-ai-workshop apply -f - <<<"$(cat pipeline/invoice_anomaly_pipeline.yaml)"
-# nebo přes Dashboard → Data Science Pipelines → Import pipeline
+# 4. nahraj pipeline + spusť první běh (one-command)
+./demo_invoice_anomaly/pipeline/run_pipeline.sh
+# script si sám:
+#   - zkompiluje yaml z .py (pokud .py je novější)
+#   - založí pipeline `invoice-anomaly` (nebo k ní přidá novou verzi)
+#   - vytvoří run s display name `invoice-anomaly-<UTC-timestamp>`
+#   - vypíše URL na běh v Dashboard
+# Alternativně manuálně: Dashboard → Data Science Pipelines → Import pipeline.
 ```
 
 ---
@@ -125,14 +132,82 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
    PARAMETRY buňka. Doménový expert ji upraví.
 4. **"Audit trail pro NIS2"** → MLflow UI (run params + metrics) →
    Model Registry (kdo schválil promo do Production).
-5. **"A když to chceme každou noc automaticky"** → DS Pipelines tab,
-   ukaž graf z `invoice_anomaly_pipeline.yaml`.
+5. **"A když to chceme každou noc automaticky — pojďme to spustit teď"** →
+   přepni do terminálu a v jednom příkazu spusť pipeline naživo:
+
+   ```bash
+   ./demo_invoice_anomaly/pipeline/run_pipeline.sh
+   ```
+
+   Script vypíše Dashboard URL — klikni na ni a přepni se na **DS Pipelines →
+   Runs**. Audience uvidí, jak se DAG `ingest → train → evaluate →
+   promote-if-passing → register` postupně rozsvěcuje:
+
+   - **ingest-invoices** — natáhne `invoices.csv` z MinIO (často cached,
+     skip pod ~2 s — řekni, že KFP cache je *feature*, ne *bug*: identický
+     vstup = neopakuj práci).
+   - **train-model** — Isolation Forest, vrátí ROC-AUC jako parametr.
+   - **evaluate-model** — gate, propustí pouze ROC-AUC ≥ 0.85.
+   - **register-model** — upload nového `.joblib` do `s3://.../models/<version>/`
+     a POST do **elos-model-registry** jako nová `pipeline-<UTC>` verze.
+     Auth: pipeline SA má bearer token přes
+     `deploy/07-model-registry-rbac.yaml` (RoleBinding na
+     `registry-user-elos-model-registry` v `rhoai-model-registries`).
+
+   Celý běh trvá ~2–3 minuty (první cold run cca 5 minut kvůli image pull).
+   Když doběhne, přepni do **Models** → `invoice-anomaly-detector` a ukaž
+   novou `pipeline-<timestamp>` verzi se `source=data-science-pipelines` a
+   `s3_uri` v custom properties. **Tohle je celý compliance příběh:**
+   git commit (kód) → MLflow run (notebook trénink) → pipeline run
+   (automatizace) → Model Registry verze (kdo, kdy, odkud) → S3 artifact
+   (immutable bytes).
+
+   > Když chce někdo z publika vidět **kód** té automatizace, otevři
+   > `pipeline/invoice_anomaly_pipeline.py` — je krátký a doslova ten samý
+   > feature engineering jako v notebooku, jen zabalený do KFP DSL.
+
+6. **"A teď ho nakliknu do produkce."** → V Dashboardu přepni do
+   **Model Registry → invoice-anomaly-detector**, klikni na novou verzi
+   `pipeline-<UTC>`, vpravo nahoře **Deploy → rh-ai-workshop**, ve formuláři
+   vyber:
+
+   - Model serving runtime: **MLServer ServingRuntime for KServe**
+     (předem připravený z `deploy/08-serving-runtime.yaml`)
+   - Connection: **MinIO — invoices bucket** (`aws-connection-rhoai-invoices`,
+     má v sobě KServe annotace `serving.kserve.io/s3-endpoint`,
+     `s3-usehttps=0`, `s3-verifyssl=0`).
+   - Path: vyplní se z `s3_uri` customProperty té verze.
+
+   Submit → přepni do **rh-ai-workshop → Models**. Audience uvidí novou kartu
+   modelu s "Loading" → "Available" za ~30–60 sekund. Pod kartou je internal
+   endpoint a kdo má roli `view` v projektu, může model rovnou volat:
+
+   ```bash
+   # z terminálu workbenche, nebo z laptopu přes oc port-forward
+   PRED=http://<inference-service>-predictor.rh-ai-workshop.svc.cluster.local:8080
+   curl -sS "$PRED/v2/models/<name>/infer" -H "Content-Type: application/json" \
+     -d '{"inputs":[{"name":"x","shape":[1,8],"datatype":"FP64",
+                     "data":[[13.5,7.2,1,1,1,1,0,5]]}]}'
+   # → výstup: -1 (anomálie) nebo 1 (normální) podle IsolationForest konvence
+   ```
+
+   **Co se právě stalo** (audit pohled): controller schválil verzi → BI tým
+   ji nakliknul z registru → KServe vytvořil `InferenceService` →
+   storage-initializer stáhl `model.joblib` z S3 (přes data-connection,
+   která má KServe annotace) → MLServer ho načetl a vystavil REST endpoint
+   v Open Inference Protocol v2. **Nikdo nepsal řádku Python** mezi
+   "model je zaregistrovaný" a "model je v produkci".
 
 ---
 
 ## 6 · Co dál (out-of-scope pro tenhle workshop)
 
-- Online inference přes KServe / Model Serving (jen joblib na disku stačí).
+- ~~Online inference přes KServe / Model Serving~~ — **už součást demo** (beat 6,
+  ServingRuntime + InferenceService přes Dashboard "Deploy"). To, co zůstává
+  out-of-scope:
+  - Production-grade ingress / mTLS / rate-limiting před prediktorem.
+  - Multi-model serving přes ModelMesh (pro shop s tisíci modely).
+  - A/B test mezi novou a starou verzí přes Knative traffic-splitting.
 - LLM-vysvětlovač "Proč právě tohle podezření?" (Granite + RAG nad fakturami).
 - Feedback loop: controller označí false positive → next run snižuje váhu.
 
@@ -151,3 +226,11 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 | MLflow run nezaloguje                                  | Operator nepřipojil env. Zkontroluj `oc get dsc -A` → `mlflowoperator: Managed`; `oc get mlflow -A` → instance `Available`; restartni workbench pod (RoleBindings + env injektuje operator při startu podu). |
 | `oc apply` na DSPA selže s `no matches for kind …`     | Komponenta `datasciencepipelines` v DSC je `Removed`. Změň na `Managed`.                 |
 | `oc apply` na Notebook selže s `no matches for kind …` | Komponenta `workbenches` v DSC je `Removed`. Změň na `Managed`.                          |
+| Pipeline `ingest-invoices` umírá s `NoCredentialsError: Unable to locate credentials` | Komponentě chybí AWS env vars. Pipeline DSL musí mít `kubernetes.use_secret_as_env(task, secret_name="aws-connection-rhoai-invoices", ...)` — viz `pipeline/invoice_anomaly_pipeline.py`. |
+| Pipeline `pip install` umírá s `No matching distribution found for boto3==1.34.*` | RHOAI interní PyPI mirror má jen RH-blessed verze (boto3 1.35+, ne 1.34). `packages_to_install` musí používat floor-pins (`boto3>=1.35,<2.0`), ne `==1.34.*`. |
+| Pipeline `register-model` → HTTP 403 / "forbidden" z Model Registry | `pipeline-runner-dspa` SA chybí v RoleBinding `invoice-anomaly-wb-registry-user`. Apply aktuální `deploy/07-model-registry-rbac.yaml` — má dva subjekty (wb + pipeline-runner). |
+| Pipeline `evaluate-model` umírá s `FileNotFoundError: ...out_metrics` | KFP v2 `Output[Metrics]` nepublikuje soubor na `in_metrics.path`; metriky žijí v MLMD metadatech, ne ve workspace artifactu. Předávej skóre jako `float` parameter mezi train ↔ evaluate, ne přes `Input[Metrics]`. |
+| `run_pipeline.sh` se přihlásí, ale `curl ... /pipelines/upload?name=invoice-anomaly&description=něco česky` vrátí HTTP 400 z haproxy | Unicode v query stringu rozhoupe haproxy. Script proto popis nedává do query (description ukládá KFP z pipeline `description` v DSL). |
+| **Deploy z Model Registry** vytvoří InferenceService, ale predikce vrací HTTP 500 `'dict' object has no attribute 'predict'` | Starší verze pipeline ukládaly do S3 dict bundle (`{"pipeline": ..., "feature_columns": ...}`). MLServer's sklearn runtime volá `.predict()` přímo na výsledku `joblib.load()`, takže potřebuje *bare* sklearn estimator. Aktuální `register_model` zapisuje vedle sebe `model.joblib` (sklearn-only) a `bundle.joblib` (dict, pro notebooky). Pokud máš staré verze, spusť backfill: download `model.joblib`, `joblib.load(...)["pipeline"]`, upload zpátky. |
+| **Deploy z Model Registry** se zasekne na "Loading" / storage-initializer hází `dial tcp: connection refused` | `aws-connection-rhoai-invoices` secret nemá KServe annotace. Apply aktuální `deploy/03-data-connection.yaml` — má `serving.kserve.io/s3-endpoint`, `s3-usehttps=0`, `s3-verifyssl=0`. |
+| V Dashboard `Models` tab je prázdno i po Deploy | Project je nesprávně označen jako `modelmesh-enabled` (ModelMesh, ne KServe). U RHOAI 3.4 self-managed by `kserve` v DSC mělo být `Managed` a `modelmeshserving` neenabled. `oc get dsc -o yaml \| grep -A1 'kserve:'` ověří. |

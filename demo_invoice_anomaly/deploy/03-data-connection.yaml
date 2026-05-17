@@ -16,6 +16,14 @@ metadata:
   annotations:
     openshift.io/display-name: "MinIO — invoices bucket"
     opendatahub.io/connection-type: "s3"
+    # KServe storage-initializer reads these annotations to know how to
+    # reach MinIO (HTTP, internal DNS, self-signed). Without them, the
+    # Dashboard "Deploy" wizard creates an InferenceService that hangs at
+    # "downloading" because it tries HTTPS by default.
+    serving.kserve.io/s3-endpoint:   "minio.rh-ai-workshop.svc.cluster.local:9000"
+    serving.kserve.io/s3-usehttps:   "0"
+    serving.kserve.io/s3-verifyssl:  "0"
+    serving.kserve.io/s3-region:     "us-east-1"
 type: Opaque
 stringData:
   AWS_ACCESS_KEY_ID:     minioadmin

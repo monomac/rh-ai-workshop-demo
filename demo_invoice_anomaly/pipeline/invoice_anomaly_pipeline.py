@@ -16,22 +16,45 @@ The pipeline orchestrates the same logic that's in the workshop notebooks,
 but as a scheduled job: ingest -> train -> evaluate -> register.
 """
 
-from kfp import dsl, compiler
+from kfp import dsl, compiler, kubernetes
 from kfp.dsl import Input, Output, Dataset, Model, Metrics
 
+# Name of the data-connection secret that `deploy/03-data-connection.yaml`
+# provisions. It carries AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+# AWS_S3_ENDPOINT / AWS_S3_BUCKET / AWS_DEFAULT_REGION — the env vars boto3
+# auto-reads.
+S3_SECRET = "aws-connection-rhoai-invoices"
+S3_SECRET_KEYS = {
+    "AWS_ACCESS_KEY_ID":     "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY": "AWS_SECRET_ACCESS_KEY",
+    "AWS_S3_ENDPOINT":       "AWS_S3_ENDPOINT",
+    "AWS_S3_BUCKET":         "AWS_S3_BUCKET",
+    "AWS_DEFAULT_REGION":    "AWS_DEFAULT_REGION",
+}
 
-# RHOAI 3.4 pipeline runtime — Python 3.12 / RHEL 9. Digest matches the
-# cluster CSV's RELATED_IMAGE_ODH_PIPELINE_RUNTIME_DATASCIENCE_CPU_PY312_IMAGE.
-BASE_IMAGE = "registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98"
+
+# RHOAI 3.4 GA pipeline runtime — Python 3.12 / RHEL 9. Digest matches
+# RELATED_IMAGE_ODH_PIPELINE_RUNTIME_DATASCIENCE_CPU_PY312_IMAGE on
+# rhods-operator.3.4.0 (verified live against sa-ai 2026-05-16).
+BASE_IMAGE = "registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:ed6634540d78910ceedc826b871641fb3f66b27be45b50df31c504582204a661"
+
+# Default external route of `elos-model-registry` in `rhoai-model-registries`.
+# In-cluster Service is NetworkPolicy-restricted to the router, so pipeline pods
+# must talk to the public route — same as the workbench's MODEL_REGISTRY_URL.
+DEFAULT_REGISTRY_URL = "https://elos-model-registry-rest.apps.rosa.sa-ai.oidv.p3.openshiftapps.com"
 
 
 # ---------------------------------------------------------------------------
 # Component: ingest
 # ---------------------------------------------------------------------------
 
+# The base runtime image already ships pandas / numpy / scikit-learn / joblib,
+# so we only `packages_to_install` what's missing (boto3, requests). Pins are
+# floors instead of exact-equal because RHOAI's PyPI mirror only carries
+# Red Hat-blessed versions (e.g. boto3 1.35+, not 1.34).
 @dsl.component(
     base_image=BASE_IMAGE,
-    packages_to_install=["pandas==2.2.*", "boto3==1.34.*"],
+    packages_to_install=["boto3>=1.35,<2.0"],
 )
 def ingest_invoices(
     s3_bucket: str,
@@ -63,10 +86,8 @@ def ingest_invoices(
 
 @dsl.component(
     base_image=BASE_IMAGE,
-    packages_to_install=[
-        "pandas==2.2.*", "numpy==1.26.*", "scikit-learn==1.4.*",
-        "joblib==1.4.*",
-    ],
+    # pandas / numpy / scikit-learn / joblib all ship in the base runtime image.
+    packages_to_install=[],
 )
 def train_model(
     in_dataset: Input[Dataset],
@@ -75,8 +96,14 @@ def train_model(
     random_state: int,
     out_model: Output[Model],
     out_metrics: Output[Metrics],
-) -> None:
-    """Train Isolation Forest on the staged invoices dataset."""
+) -> float:
+    """Train Isolation Forest; also returns ROC-AUC so the gate can read it.
+
+    We `log_metric` to `out_metrics` for the Dashboard's Metrics tab, AND
+    return roc_auc as a value-typed output so the next task can branch on it
+    without re-reading the artifact (Input[Metrics] artifacts in KFP v2 live
+    in MLMD, not as a file at `.path` — so reading them by file is fragile).
+    """
     import json
     import joblib
     import numpy as np
@@ -124,8 +151,10 @@ def train_model(
     y      = df["is_anomaly"].values if "is_anomaly" in df.columns else None
 
     metrics = {"n_rows": len(df)}
+    roc_auc = 0.0
     if y is not None and y.sum() > 0:
-        metrics["roc_auc"] = float(roc_auc_score(y, scores))
+        roc_auc = float(roc_auc_score(y, scores))
+        metrics["roc_auc"] = roc_auc
         metrics["pr_auc"]  = float(average_precision_score(y, scores))
 
     joblib.dump({
@@ -141,6 +170,7 @@ def train_model(
     for k, v in metrics.items():
         out_metrics.log_metric(k, v)
     print("metrics:", json.dumps(metrics, indent=2))
+    return roc_auc
 
 
 # ---------------------------------------------------------------------------
@@ -148,20 +178,10 @@ def train_model(
 # ---------------------------------------------------------------------------
 
 @dsl.component(base_image=BASE_IMAGE)
-def evaluate_model(
-    in_metrics: Input[Metrics],
-    min_roc_auc: float,
-) -> bool:
+def evaluate_model(roc_auc: float, min_roc_auc: float) -> bool:
     """Gate: pass only if ROC-AUC meets the configured threshold."""
-    import json
-    raw = open(in_metrics.path).read()
-    print("metrics file:", raw)
-    data = json.loads(raw)
-    # KFP metrics file shape: {"metrics": [{"name": "roc_auc", "numberValue": ...}, ...]}
-    by_name = {m["name"]: m.get("numberValue", 0) for m in data.get("metrics", [])}
-    roc = by_name.get("roc_auc", 0)
-    decision = roc >= min_roc_auc
-    print(f"roc_auc={roc:.3f}, threshold={min_roc_auc:.3f} -> promote={decision}")
+    decision = roc_auc >= min_roc_auc
+    print(f"roc_auc={roc_auc:.3f}, threshold={min_roc_auc:.3f} -> promote={decision}")
     return decision
 
 
@@ -171,7 +191,7 @@ def evaluate_model(
 
 @dsl.component(
     base_image=BASE_IMAGE,
-    packages_to_install=["boto3==1.34.*", "requests==2.32.*"],
+    packages_to_install=["boto3>=1.35,<2.0", "requests>=2.32,<3.0"],
 )
 def register_model(
     in_model: Input[Model],
@@ -179,7 +199,14 @@ def register_model(
     model_name: str,
     registry_url: str,
 ) -> str:
-    """Copy the model to a versioned S3 key and register it in Model Registry."""
+    """Copy the model to a versioned S3 key and register it in Model Registry.
+
+    Auth pattern mirrors notebook 03 §3.5 — bearer SA token + TLS via the
+    cluster's custom CA bundle. The pipeline pod's SA is bound to
+    `registry-user-elos-model-registry` via `deploy/07-model-registry-rbac.yaml`.
+    `?name=` is ignored by v1alpha3, so we list+filter client-side, then create
+    idempotently. Version POST requires `registeredModelId` in the body.
+    """
     import os
     import datetime as dt
     import boto3
@@ -191,26 +218,107 @@ def register_model(
         region_name=os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
     )
     version = dt.datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    key = f"models/{model_name}/{version}/model.joblib"
-    with open(in_model.path, "rb") as f:
-        s3.put_object(Bucket=s3_bucket, Key=key, Body=f.read())
-    s3_uri = f"s3://{s3_bucket}/{key}"
-    print("uploaded:", s3_uri)
+    base_key = f"models/{model_name}/{version}"
 
-    if registry_url:
-        try:
-            payload = {
-                "name": model_name,
-                "description": f"Invoice anomaly model {version} (auto-promoted by pipeline)",
-                "owner": "controlling@example.com",
-            }
+    # train_model writes a *dict* bundle (pipeline + metadata) to in_model.path,
+    # which the notebooks know how to unpack. MLServer's sklearn runtime,
+    # however, expects the joblib to deserialize directly to an estimator
+    # with a `.predict()` method. So we split:
+    #   - model.joblib   — just the sklearn Pipeline (deploy-ready)
+    #   - bundle.joblib  — the original dict (for notebooks and audit)
+    import joblib  # noqa: E402
+    bundle = joblib.load(in_model.path)
+    sk_pipeline = bundle["pipeline"] if isinstance(bundle, dict) else bundle
+
+    import io
+    sklearn_buf = io.BytesIO()
+    joblib.dump(sk_pipeline, sklearn_buf)
+    s3.put_object(Bucket=s3_bucket, Key=f"{base_key}/model.joblib",
+                  Body=sklearn_buf.getvalue())
+    with open(in_model.path, "rb") as f:
+        s3.put_object(Bucket=s3_bucket, Key=f"{base_key}/bundle.joblib",
+                      Body=f.read())
+    s3_uri = f"s3://{s3_bucket}/{base_key}/"
+    print("uploaded:", s3_uri)
+    print("  - model.joblib  (sklearn Pipeline, MLServer-loadable)")
+    print("  - bundle.joblib (full dict bundle for notebooks)")
+
+    registry_url = (registry_url or "").rstrip("/")
+    if not registry_url:
+        print("registry_url empty — skipping Model Registry call.")
+        return s3_uri
+
+    TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    CA_BUNDLE = "/etc/pki/tls/custom-certs/ca-bundle.crt"
+    API = f"{registry_url}/api/model_registry/v1alpha3"
+
+    if not os.path.exists(TOKEN_PATH):
+        print(f"SA token not at {TOKEN_PATH} — registry call skipped.")
+        return s3_uri
+    with open(TOKEN_PATH) as f:
+        token = f.read().strip()
+    headers = {"Authorization": f"Bearer {token}",
+               "Content-Type": "application/json"}
+    verify = CA_BUNDLE if os.path.exists(CA_BUNDLE) else True
+
+    try:
+        # 1) Ensure the registered model exists (list + client-side filter,
+        #    because v1alpha3 ignores ?name=).
+        page = requests.get(f"{API}/registered_models",
+                            headers=headers, verify=verify, timeout=10)
+        page.raise_for_status()
+        rm_id = None
+        for m in page.json().get("items", []):
+            if m.get("name") == model_name:
+                rm_id = m["id"]
+                break
+        if rm_id is None:
             r = requests.post(
-                f"{registry_url}/api/model_registry/v1alpha3/registered_models",
-                json=payload, timeout=10,
+                f"{API}/registered_models",
+                headers=headers, verify=verify, timeout=10,
+                json={
+                    "name": model_name,
+                    "description": "Isolation Forest pro detekci anomálií "
+                                   "ve fakturách (auto-promoted by pipeline).",
+                    "owner": "controlling@example.com",
+                },
             )
-            print("registry response:", r.status_code, r.text[:200])
-        except Exception as e:  # noqa: BLE001
-            print("registry call failed (non-fatal):", e)
+            r.raise_for_status()
+            rm_id = r.json()["id"]
+            print(f"registered_model created: {model_name} (id={rm_id})")
+        else:
+            print(f"registered_model exists: {model_name} (id={rm_id})")
+
+        # 2) Create a model version tied to this pipeline run.
+        mv = {
+            "name": f"pipeline-{version}",
+            "description": f"Pipeline build {version} ({s3_uri})",
+            "state": "LIVE",
+            "author": "ds-pipelines",
+            "registeredModelId": rm_id,  # required in body too, not just path
+            "customProperties": {
+                "s3_uri": {
+                    "string_value": s3_uri,
+                    "metadataType": "MetadataStringValue",
+                },
+                "source": {
+                    "string_value": "data-science-pipelines",
+                    "metadataType": "MetadataStringValue",
+                },
+            },
+        }
+        v = requests.post(f"{API}/registered_models/{rm_id}/versions",
+                          headers=headers, json=mv, verify=verify, timeout=10)
+        if v.status_code == 201:
+            print(f"model_version created: {mv['name']} (id={v.json()['id']})")
+        elif v.status_code == 409:
+            print(f"model_version exists: {mv['name']}")
+        else:
+            print(f"version POST -> {v.status_code}: {v.text[:200]}")
+    except Exception as e:  # noqa: BLE001
+        # Non-fatal: S3 publish already succeeded; surface the error for the
+        # Dashboard logs but don't fail the pipeline run.
+        print("registry call failed (non-fatal):", e)
     return s3_uri
 
 
@@ -230,9 +338,13 @@ def invoice_anomaly_pipeline(
     random_state: int = 42,
     min_roc_auc: float = 0.85,
     model_name: str = "invoice-anomaly-detector",
-    registry_url: str = "http://model-registry-service:8080",
+    registry_url: str = DEFAULT_REGISTRY_URL,
 ):
     ingest = ingest_invoices(s3_bucket=s3_bucket, s3_key=s3_key)
+    # Inject AWS creds from the data-connection secret so boto3 can talk to MinIO.
+    kubernetes.use_secret_as_env(
+        ingest, secret_name=S3_SECRET, secret_key_to_env=S3_SECRET_KEYS,
+    )
 
     train = train_model(
         in_dataset=ingest.outputs["out_dataset"],
@@ -242,16 +354,21 @@ def invoice_anomaly_pipeline(
     )
 
     evaluate = evaluate_model(
-        in_metrics=train.outputs["out_metrics"],
+        roc_auc=train.outputs["Output"],
         min_roc_auc=min_roc_auc,
     )
 
     with dsl.If(evaluate.output == True, name="promote-if-passing"):
-        register_model(
+        register = register_model(
             in_model=train.outputs["out_model"],
             s3_bucket=s3_bucket,
             model_name=model_name,
             registry_url=registry_url,
+        )
+        # register_model writes the model joblib back to S3 and posts to the
+        # Model Registry, so it needs the same AWS creds.
+        kubernetes.use_secret_as_env(
+            register, secret_name=S3_SECRET, secret_key_to_env=S3_SECRET_KEYS,
         )
 
 

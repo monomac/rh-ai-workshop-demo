@@ -1,0 +1,107 @@
+# MLServer ServingRuntime for the Invoice Anomaly demo.
+#
+# Why this file exists:
+#   When the user clicks "Deploy" on a model version in the RHOAI Dashboard's
+#   Model Registry, the Dashboard creates an `InferenceService` and points it
+#   at one of the project's `ServingRuntime`s. If no runtime exists in the
+#   project, the "Deploy" wizard makes the user pick a template and fill in
+#   a form. Pre-creating this manifest lets the workshop demo be a single
+#   click: "Deploy" -> choose version -> Submit.
+#
+# Why MLServer (not OVMS or vLLM):
+#   - OVMS expects OpenVINO IR or ONNX, not sklearn joblib.
+#   - vLLM is for LLMs.
+#   - MLServer's `sklearn` runtime loads `model.joblib` directly. Our
+#     IsolationForest pipeline is a vanilla sklearn `Pipeline`, so this fits.
+#
+# Source: instantiated from the cluster-wide template
+# `mlserver-runtime-template` (in `redhat-ods-applications`, shipped with
+# RHOAI 3.4 GA). Kept project-scoped so the Dashboard's "Serving runtimes"
+# pane lists it under this project only.
+#
+# Image is digest-pinned to the value the template ships with on
+# `rhods-operator.3.4.0`. If the operator upgrades, refresh the digest from:
+#   oc -n redhat-ods-applications get template mlserver-runtime-template \
+#     -o jsonpath='{.objects[0].spec.containers[0].image}'
+
+apiVersion: serving.kserve.io/v1alpha1
+kind: ServingRuntime
+metadata:
+  name: mlserver-runtime
+  namespace: rh-ai-workshop
+  annotations:
+    opendatahub.io/runtime-version: "1.7.1"
+    openshift.io/display-name: MLServer ServingRuntime for KServe
+    serving.kserve.io/server-type: mlserver
+  labels:
+    opendatahub.io/dashboard: "true"
+spec:
+  multiModel: false
+  protocolVersions:
+    - v2
+  supportedModelFormats:
+    - name: sklearn
+      version: "0"
+      autoSelect: true
+    - name: sklearn
+      version: "1"
+      autoSelect: true
+    - name: xgboost
+      version: "1"
+    - name: xgboost
+      version: "2"
+    - name: lightgbm
+      version: "3"
+    - name: lightgbm
+      version: "4"
+  annotations:
+    monitoring.opendatahub.io/scrape: "true"
+    opendatahub.io/kserve-runtime: mlserver
+    prometheus.io/path: /metrics
+    prometheus.io/port: "8082"
+  containers:
+    - name: kserve-container
+      image: registry.redhat.io/rhoai/odh-mlserver-rhel9@sha256:d76bea18afe7b361847babb7a8ebc51fdbcd8164435f1bcb971e1701ba1bc595
+      ports:
+        - containerPort: 8080
+          protocol: TCP
+      env:
+        # KServe substitutes these `{{.Labels.modelClass}}` / `{{.Name}}` at
+        # InferenceService rendering time — they reference the IS labels.
+        - name: MLSERVER_MODEL_IMPLEMENTATION
+          value: "{{.Labels.modelClass}}"
+        - name: MLSERVER_HTTP_PORT
+          value: "8080"
+        - name: MLSERVER_MODELS_DIR
+          value: /mnt/models
+      livenessProbe:
+        httpGet:
+          path: /v2/models/{{.Name}}/ready
+          port: 8080
+        initialDelaySeconds: 20
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 6
+      readinessProbe:
+        httpGet:
+          path: /v2/models/{{.Name}}/ready
+          port: 8080
+        initialDelaySeconds: 5
+        periodSeconds: 5
+        timeoutSeconds: 5
+        failureThreshold: 3
+      startupProbe:
+        exec:
+          command:
+            - /bin/sh
+            - -c
+            - '[ -n "$(ls -A /mnt/models 2>/dev/null)" ]'
+        initialDelaySeconds: 1
+        periodSeconds: 1
+        failureThreshold: 1
+      securityContext:
+        allowPrivilegeEscalation: false
+        runAsNonRoot: true
+        privileged: false
+        capabilities:
+          drop: [ALL]

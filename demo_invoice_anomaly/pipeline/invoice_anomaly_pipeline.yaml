@@ -7,7 +7,7 @@
 #    model_name: str [Default: 'invoice-anomaly-detector']
 #    n_estimators: int [Default: 200.0]
 #    random_state: int [Default: 42.0]
-#    registry_url: str [Default: 'http://model-registry-service:8080']
+#    registry_url: str [Default: 'https://elos-model-registry-rest.apps.rosa.sa-ai.oidv.p3.openshiftapps.com']
 #    s3_bucket: str [Default: 'rhoai-workshop-invoices']
 #    s3_key: str [Default: 'invoices.csv']
 components:
@@ -50,13 +50,10 @@ components:
   comp-evaluate-model:
     executorLabel: exec-evaluate-model
     inputDefinitions:
-      artifacts:
-        in_metrics:
-          artifactType:
-            schemaTitle: system.Metrics
-            schemaVersion: 0.0.1
       parameters:
         min_roc_auc:
+          parameterType: NUMBER_DOUBLE
+        roc_auc:
           parameterType: NUMBER_DOUBLE
     outputDefinitions:
       parameters:
@@ -120,6 +117,9 @@ components:
           artifactType:
             schemaTitle: system.Model
             schemaVersion: 0.0.1
+      parameters:
+        Output:
+          parameterType: NUMBER_DOUBLE
 deploymentSpec:
   executors:
     exec-evaluate-model:
@@ -148,16 +148,12 @@ deploymentSpec:
 
           '
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
-          \ *\n\ndef evaluate_model(\n    in_metrics: Input[Metrics],\n    min_roc_auc:\
-          \ float,\n) -> bool:\n    \"\"\"Gate: pass only if ROC-AUC meets the configured\
-          \ threshold.\"\"\"\n    import json\n    raw = open(in_metrics.path).read()\n\
-          \    print(\"metrics file:\", raw)\n    data = json.loads(raw)\n    # KFP\
-          \ metrics file shape: {\"metrics\": [{\"name\": \"roc_auc\", \"numberValue\"\
-          : ...}, ...]}\n    by_name = {m[\"name\"]: m.get(\"numberValue\", 0) for\
-          \ m in data.get(\"metrics\", [])}\n    roc = by_name.get(\"roc_auc\", 0)\n\
-          \    decision = roc >= min_roc_auc\n    print(f\"roc_auc={roc:.3f}, threshold={min_roc_auc:.3f}\
-          \ -> promote={decision}\")\n    return decision\n\n"
-        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
+          \ *\n\ndef evaluate_model(roc_auc: float, min_roc_auc: float) -> bool:\n\
+          \    \"\"\"Gate: pass only if ROC-AUC meets the configured threshold.\"\"\
+          \"\n    decision = roc_auc >= min_roc_auc\n    print(f\"roc_auc={roc_auc:.3f},\
+          \ threshold={min_roc_auc:.3f} -> promote={decision}\")\n    return decision\n\
+          \n"
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:ed6634540d78910ceedc826b871641fb3f66b27be45b50df31c504582204a661
     exec-ingest-invoices:
       container:
         args:
@@ -170,10 +166,10 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.*'\
-          \ 'boto3==1.34.*'  &&  python3 -m pip install --quiet --no-warn-script-location\
-          \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
-          3.9\"' && \"$0\" \"$@\"\n"
+          \ python3 -m pip install --quiet --no-warn-script-location 'boto3>=1.35,<2.0'\
+          \  &&  python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -196,7 +192,7 @@ deploymentSpec:
           \ \"wb\") as f:\n        f.write(body)\n    out_dataset.path = out_path\n\
           \    df = pd.read_csv(out_path)\n    print(f\"ingested {len(df)} rows from\
           \ s3://{s3_bucket}/{s3_key}\")\n\n"
-        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:ed6634540d78910ceedc826b871641fb3f66b27be45b50df31c504582204a661
     exec-register-model:
       container:
         args:
@@ -209,8 +205,8 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'boto3==1.34.*'\
-          \ 'requests==2.32.*'  &&  python3 -m pip install --quiet --no-warn-script-location\
+          \ python3 -m pip install --quiet --no-warn-script-location 'boto3>=1.35,<2.0'\
+          \ 'requests>=2.32,<3.0'  &&  python3 -m pip install --quiet --no-warn-script-location\
           \ 'kfp==2.16.1' '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"\
           3.9\"' && \"$0\" \"$@\"\n"
         - sh
@@ -226,24 +222,80 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef register_model(\n    in_model: Input[Model],\n    s3_bucket:\
           \ str,\n    model_name: str,\n    registry_url: str,\n) -> str:\n    \"\"\
-          \"Copy the model to a versioned S3 key and register it in Model Registry.\"\
-          \"\"\n    import os\n    import datetime as dt\n    import boto3\n    import\
-          \ requests\n\n    s3 = boto3.client(\n        \"s3\",\n        endpoint_url=os.environ.get(\"\
-          AWS_S3_ENDPOINT\"),\n        region_name=os.environ.get(\"AWS_DEFAULT_REGION\"\
-          , \"us-east-1\"),\n    )\n    version = dt.datetime.utcnow().strftime(\"\
-          %Y%m%dT%H%M%S\")\n    key = f\"models/{model_name}/{version}/model.joblib\"\
-          \n    with open(in_model.path, \"rb\") as f:\n        s3.put_object(Bucket=s3_bucket,\
-          \ Key=key, Body=f.read())\n    s3_uri = f\"s3://{s3_bucket}/{key}\"\n  \
-          \  print(\"uploaded:\", s3_uri)\n\n    if registry_url:\n        try:\n\
-          \            payload = {\n                \"name\": model_name,\n      \
-          \          \"description\": f\"Invoice anomaly model {version} (auto-promoted\
-          \ by pipeline)\",\n                \"owner\": \"controlling@example.com\"\
-          ,\n            }\n            r = requests.post(\n                f\"{registry_url}/api/model_registry/v1alpha3/registered_models\"\
-          ,\n                json=payload, timeout=10,\n            )\n          \
-          \  print(\"registry response:\", r.status_code, r.text[:200])\n        except\
-          \ Exception as e:  # noqa: BLE001\n            print(\"registry call failed\
+          \"Copy the model to a versioned S3 key and register it in Model Registry.\n\
+          \n    Auth pattern mirrors notebook 03 \xA73.5 \u2014 bearer SA token +\
+          \ TLS via the\n    cluster's custom CA bundle. The pipeline pod's SA is\
+          \ bound to\n    `registry-user-elos-model-registry` via `deploy/07-model-registry-rbac.yaml`.\n\
+          \    `?name=` is ignored by v1alpha3, so we list+filter client-side, then\
+          \ create\n    idempotently. Version POST requires `registeredModelId` in\
+          \ the body.\n    \"\"\"\n    import os\n    import datetime as dt\n    import\
+          \ boto3\n    import requests\n\n    s3 = boto3.client(\n        \"s3\",\n\
+          \        endpoint_url=os.environ.get(\"AWS_S3_ENDPOINT\"),\n        region_name=os.environ.get(\"\
+          AWS_DEFAULT_REGION\", \"us-east-1\"),\n    )\n    version = dt.datetime.utcnow().strftime(\"\
+          %Y%m%dT%H%M%S\")\n    base_key = f\"models/{model_name}/{version}\"\n\n\
+          \    # train_model writes a *dict* bundle (pipeline + metadata) to in_model.path,\n\
+          \    # which the notebooks know how to unpack. MLServer's sklearn runtime,\n\
+          \    # however, expects the joblib to deserialize directly to an estimator\n\
+          \    # with a `.predict()` method. So we split:\n    #   - model.joblib\
+          \   \u2014 just the sklearn Pipeline (deploy-ready)\n    #   - bundle.joblib\
+          \  \u2014 the original dict (for notebooks and audit)\n    import joblib\
+          \  # noqa: E402\n    bundle = joblib.load(in_model.path)\n    sk_pipeline\
+          \ = bundle[\"pipeline\"] if isinstance(bundle, dict) else bundle\n\n   \
+          \ import io\n    sklearn_buf = io.BytesIO()\n    joblib.dump(sk_pipeline,\
+          \ sklearn_buf)\n    s3.put_object(Bucket=s3_bucket, Key=f\"{base_key}/model.joblib\"\
+          ,\n                  Body=sklearn_buf.getvalue())\n    with open(in_model.path,\
+          \ \"rb\") as f:\n        s3.put_object(Bucket=s3_bucket, Key=f\"{base_key}/bundle.joblib\"\
+          ,\n                      Body=f.read())\n    s3_uri = f\"s3://{s3_bucket}/{base_key}/\"\
+          \n    print(\"uploaded:\", s3_uri)\n    print(\"  - model.joblib  (sklearn\
+          \ Pipeline, MLServer-loadable)\")\n    print(\"  - bundle.joblib (full dict\
+          \ bundle for notebooks)\")\n\n    registry_url = (registry_url or \"\").rstrip(\"\
+          /\")\n    if not registry_url:\n        print(\"registry_url empty \u2014\
+          \ skipping Model Registry call.\")\n        return s3_uri\n\n    TOKEN_PATH\
+          \ = \"/var/run/secrets/kubernetes.io/serviceaccount/token\"\n    CA_BUNDLE\
+          \ = \"/etc/pki/tls/custom-certs/ca-bundle.crt\"\n    API = f\"{registry_url}/api/model_registry/v1alpha3\"\
+          \n\n    if not os.path.exists(TOKEN_PATH):\n        print(f\"SA token not\
+          \ at {TOKEN_PATH} \u2014 registry call skipped.\")\n        return s3_uri\n\
+          \    with open(TOKEN_PATH) as f:\n        token = f.read().strip()\n   \
+          \ headers = {\"Authorization\": f\"Bearer {token}\",\n               \"\
+          Content-Type\": \"application/json\"}\n    verify = CA_BUNDLE if os.path.exists(CA_BUNDLE)\
+          \ else True\n\n    try:\n        # 1) Ensure the registered model exists\
+          \ (list + client-side filter,\n        #    because v1alpha3 ignores ?name=).\n\
+          \        page = requests.get(f\"{API}/registered_models\",\n           \
+          \                 headers=headers, verify=verify, timeout=10)\n        page.raise_for_status()\n\
+          \        rm_id = None\n        for m in page.json().get(\"items\", []):\n\
+          \            if m.get(\"name\") == model_name:\n                rm_id =\
+          \ m[\"id\"]\n                break\n        if rm_id is None:\n        \
+          \    r = requests.post(\n                f\"{API}/registered_models\",\n\
+          \                headers=headers, verify=verify, timeout=10,\n         \
+          \       json={\n                    \"name\": model_name,\n            \
+          \        \"description\": \"Isolation Forest pro detekci anom\xE1li\xED\
+          \ \"\n                                   \"ve faktur\xE1ch (auto-promoted\
+          \ by pipeline).\",\n                    \"owner\": \"controlling@example.com\"\
+          ,\n                },\n            )\n            r.raise_for_status()\n\
+          \            rm_id = r.json()[\"id\"]\n            print(f\"registered_model\
+          \ created: {model_name} (id={rm_id})\")\n        else:\n            print(f\"\
+          registered_model exists: {model_name} (id={rm_id})\")\n\n        # 2) Create\
+          \ a model version tied to this pipeline run.\n        mv = {\n         \
+          \   \"name\": f\"pipeline-{version}\",\n            \"description\": f\"\
+          Pipeline build {version} ({s3_uri})\",\n            \"state\": \"LIVE\"\
+          ,\n            \"author\": \"ds-pipelines\",\n            \"registeredModelId\"\
+          : rm_id,  # required in body too, not just path\n            \"customProperties\"\
+          : {\n                \"s3_uri\": {\n                    \"string_value\"\
+          : s3_uri,\n                    \"metadataType\": \"MetadataStringValue\"\
+          ,\n                },\n                \"source\": {\n                 \
+          \   \"string_value\": \"data-science-pipelines\",\n                    \"\
+          metadataType\": \"MetadataStringValue\",\n                },\n         \
+          \   },\n        }\n        v = requests.post(f\"{API}/registered_models/{rm_id}/versions\"\
+          ,\n                          headers=headers, json=mv, verify=verify, timeout=10)\n\
+          \        if v.status_code == 201:\n            print(f\"model_version created:\
+          \ {mv['name']} (id={v.json()['id']})\")\n        elif v.status_code == 409:\n\
+          \            print(f\"model_version exists: {mv['name']}\")\n        else:\n\
+          \            print(f\"version POST -> {v.status_code}: {v.text[:200]}\"\
+          )\n    except Exception as e:  # noqa: BLE001\n        # Non-fatal: S3 publish\
+          \ already succeeded; surface the error for the\n        # Dashboard logs\
+          \ but don't fail the pipeline run.\n        print(\"registry call failed\
           \ (non-fatal):\", e)\n    return s3_uri\n\n"
-        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:ed6634540d78910ceedc826b871641fb3f66b27be45b50df31c504582204a661
     exec-train-model:
       container:
         args:
@@ -256,11 +308,9 @@ deploymentSpec:
         - -c
         - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
-          \ python3 -m pip install --quiet --no-warn-script-location 'pandas==2.2.*'\
-          \ 'numpy==1.26.*' 'scikit-learn==1.4.*' 'joblib==1.4.*'  &&  python3 -m\
-          \ pip install --quiet --no-warn-script-location 'kfp==2.16.1' '--no-deps'\
-          \ 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"$0\" \"$@\"\
-          \n"
+          \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.16.1'\
+          \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
+          $0\" \"$@\"\n"
         - sh
         - -ec
         - 'program_path=$(mktemp -d)
@@ -274,50 +324,56 @@ deploymentSpec:
         - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef train_model(\n    in_dataset: Input[Dataset],\n    contamination:\
           \ float,\n    n_estimators: int,\n    random_state: int,\n    out_model:\
-          \ Output[Model],\n    out_metrics: Output[Metrics],\n) -> None:\n    \"\"\
-          \"Train Isolation Forest on the staged invoices dataset.\"\"\"\n    import\
-          \ json\n    import joblib\n    import numpy as np\n    import pandas as\
-          \ pd\n    from datetime import date\n    from sklearn.ensemble import IsolationForest\n\
-          \    from sklearn.metrics import roc_auc_score, average_precision_score\n\
-          \    from sklearn.pipeline import Pipeline\n    from sklearn.preprocessing\
-          \ import StandardScaler\n\n    df = pd.read_csv(in_dataset.path)\n    df[\"\
-          issued_on\"] = pd.to_datetime(df[\"issued_on\"]).dt.date\n    df[\"due_on\"\
-          ]    = pd.to_datetime(df[\"due_on\"]).dt.date\n\n    # Inline feature engineering\
-          \ \u2014 kept short, mirrors src/invoice_features.py\n    df[\"log_amount\"\
-          ]    = np.log1p(df[\"amount_czk\"])\n    cat_stats = df.groupby(\"category\"\
-          )[\"amount_czk\"].agg([\"mean\", \"std\"]).fillna(1)\n    cat_stats[\"std\"\
-          ]    = cat_stats[\"std\"].replace(0, 1)\n    df = df.merge(cat_stats.rename(columns={\"\
-          mean\": \"_m\", \"std\": \"_s\"}),\n                  left_on=\"category\"\
-          , right_index=True, how=\"left\")\n    df[\"amount_zscore_in_category\"\
-          ] = (df[\"amount_czk\"] - df[\"_m\"]) / df[\"_s\"]\n    df[\"is_weekend\"\
-          ]     = pd.to_datetime(df[\"issued_on\"]).dt.weekday.ge(5).astype(int)\n\
-          \    df[\"missing_po\"]     = df[\"po_number\"].fillna(\"\").astype(str).eq(\"\
-          \").astype(int)\n    df[\"round_sum_flag\"] = ((df[\"amount_czk\"] % 10_000\
-          \ == 0) & (df[\"amount_czk\"] >= 10_000)).astype(int)\n    df[\"days_to_due\"\
-          ]    = (pd.to_datetime(df[\"due_on\"]) - pd.to_datetime(df[\"issued_on\"\
-          ])).dt.days\n    vfreq = df[\"vendor\"].value_counts()\n    df[\"vendor_frequency\"\
-          ] = df[\"vendor\"].map(vfreq).fillna(0)\n    cat_idx = {c: i for i, c in\
-          \ enumerate(sorted(df[\"category\"].unique()))}\n    df[\"category_idx\"\
-          ]   = df[\"category\"].map(cat_idx)\n\n    feature_cols = [\"log_amount\"\
-          , \"amount_zscore_in_category\", \"is_weekend\",\n                    \"\
-          missing_po\", \"vendor_frequency\", \"round_sum_flag\",\n              \
-          \      \"days_to_due\", \"category_idx\"]\n    X = df[feature_cols].astype(float).values\n\
+          \ Output[Model],\n    out_metrics: Output[Metrics],\n) -> float:\n    \"\
+          \"\"Train Isolation Forest; also returns ROC-AUC so the gate can read it.\n\
+          \n    We `log_metric` to `out_metrics` for the Dashboard's Metrics tab,\
+          \ AND\n    return roc_auc as a value-typed output so the next task can branch\
+          \ on it\n    without re-reading the artifact (Input[Metrics] artifacts in\
+          \ KFP v2 live\n    in MLMD, not as a file at `.path` \u2014 so reading them\
+          \ by file is fragile).\n    \"\"\"\n    import json\n    import joblib\n\
+          \    import numpy as np\n    import pandas as pd\n    from datetime import\
+          \ date\n    from sklearn.ensemble import IsolationForest\n    from sklearn.metrics\
+          \ import roc_auc_score, average_precision_score\n    from sklearn.pipeline\
+          \ import Pipeline\n    from sklearn.preprocessing import StandardScaler\n\
+          \n    df = pd.read_csv(in_dataset.path)\n    df[\"issued_on\"] = pd.to_datetime(df[\"\
+          issued_on\"]).dt.date\n    df[\"due_on\"]    = pd.to_datetime(df[\"due_on\"\
+          ]).dt.date\n\n    # Inline feature engineering \u2014 kept short, mirrors\
+          \ src/invoice_features.py\n    df[\"log_amount\"]    = np.log1p(df[\"amount_czk\"\
+          ])\n    cat_stats = df.groupby(\"category\")[\"amount_czk\"].agg([\"mean\"\
+          , \"std\"]).fillna(1)\n    cat_stats[\"std\"]    = cat_stats[\"std\"].replace(0,\
+          \ 1)\n    df = df.merge(cat_stats.rename(columns={\"mean\": \"_m\", \"std\"\
+          : \"_s\"}),\n                  left_on=\"category\", right_index=True, how=\"\
+          left\")\n    df[\"amount_zscore_in_category\"] = (df[\"amount_czk\"] - df[\"\
+          _m\"]) / df[\"_s\"]\n    df[\"is_weekend\"]     = pd.to_datetime(df[\"issued_on\"\
+          ]).dt.weekday.ge(5).astype(int)\n    df[\"missing_po\"]     = df[\"po_number\"\
+          ].fillna(\"\").astype(str).eq(\"\").astype(int)\n    df[\"round_sum_flag\"\
+          ] = ((df[\"amount_czk\"] % 10_000 == 0) & (df[\"amount_czk\"] >= 10_000)).astype(int)\n\
+          \    df[\"days_to_due\"]    = (pd.to_datetime(df[\"due_on\"]) - pd.to_datetime(df[\"\
+          issued_on\"])).dt.days\n    vfreq = df[\"vendor\"].value_counts()\n    df[\"\
+          vendor_frequency\"] = df[\"vendor\"].map(vfreq).fillna(0)\n    cat_idx =\
+          \ {c: i for i, c in enumerate(sorted(df[\"category\"].unique()))}\n    df[\"\
+          category_idx\"]   = df[\"category\"].map(cat_idx)\n\n    feature_cols =\
+          \ [\"log_amount\", \"amount_zscore_in_category\", \"is_weekend\",\n    \
+          \                \"missing_po\", \"vendor_frequency\", \"round_sum_flag\"\
+          ,\n                    \"days_to_due\", \"category_idx\"]\n    X = df[feature_cols].astype(float).values\n\
           \n    pipe = Pipeline([\n        (\"scaler\", StandardScaler()),\n     \
           \   (\"iforest\", IsolationForest(contamination=contamination,\n       \
           \                             n_estimators=n_estimators,\n             \
           \                       random_state=random_state)),\n    ])\n    pipe.fit(X)\n\
           \n    scores = -pipe.decision_function(X)\n    y      = df[\"is_anomaly\"\
           ].values if \"is_anomaly\" in df.columns else None\n\n    metrics = {\"\
-          n_rows\": len(df)}\n    if y is not None and y.sum() > 0:\n        metrics[\"\
-          roc_auc\"] = float(roc_auc_score(y, scores))\n        metrics[\"pr_auc\"\
-          ]  = float(average_precision_score(y, scores))\n\n    joblib.dump({\n  \
-          \      \"pipeline\": pipe,\n        \"feature_columns\": feature_cols,\n\
-          \        \"category_index\": cat_idx,\n        \"vendor_freq_table\": vfreq.to_dict(),\n\
-          \        \"category_stats\": cat_stats.to_dict(orient=\"index\"),\n    \
-          \    \"metrics\": metrics,\n        \"trained_on\": str(date.today()),\n\
-          \    }, out_model.path)\n\n    for k, v in metrics.items():\n        out_metrics.log_metric(k,\
-          \ v)\n    print(\"metrics:\", json.dumps(metrics, indent=2))\n\n"
-        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:10a3a4538626f6f7630a4663938175daf560c62dbbf2d37d7b460441415b9a98
+          n_rows\": len(df)}\n    roc_auc = 0.0\n    if y is not None and y.sum()\
+          \ > 0:\n        roc_auc = float(roc_auc_score(y, scores))\n        metrics[\"\
+          roc_auc\"] = roc_auc\n        metrics[\"pr_auc\"]  = float(average_precision_score(y,\
+          \ scores))\n\n    joblib.dump({\n        \"pipeline\": pipe,\n        \"\
+          feature_columns\": feature_cols,\n        \"category_index\": cat_idx,\n\
+          \        \"vendor_freq_table\": vfreq.to_dict(),\n        \"category_stats\"\
+          : cat_stats.to_dict(orient=\"index\"),\n        \"metrics\": metrics,\n\
+          \        \"trained_on\": str(date.today()),\n    }, out_model.path)\n\n\
+          \    for k, v in metrics.items():\n        out_metrics.log_metric(k, v)\n\
+          \    print(\"metrics:\", json.dumps(metrics, indent=2))\n    return roc_auc\n\
+          \n"
+        image: registry.redhat.io/rhoai/odh-pipeline-runtime-datascience-cpu-py312-rhel9@sha256:ed6634540d78910ceedc826b871641fb3f66b27be45b50df31c504582204a661
 pipelineInfo:
   description: "Tr\xE9nink a registrace modelu pro detekci anom\xE1li\xED ve faktur\xE1\
     ch."
@@ -361,14 +417,13 @@ root:
         dependentTasks:
         - train-model
         inputs:
-          artifacts:
-            in_metrics:
-              taskOutputArtifact:
-                outputArtifactKey: out_metrics
-                producerTask: train-model
           parameters:
             min_roc_auc:
               componentInputParameter: min_roc_auc
+            roc_auc:
+              taskOutputParameter:
+                outputParameterKey: Output
+                producerTask: train-model
         taskInfo:
           name: evaluate-model
       ingest-invoices:
@@ -429,7 +484,7 @@ root:
         isOptional: true
         parameterType: NUMBER_INTEGER
       registry_url:
-        defaultValue: http://model-registry-service:8080
+        defaultValue: https://elos-model-registry-rest.apps.rosa.sa-ai.oidv.p3.openshiftapps.com
         isOptional: true
         parameterType: STRING
       s3_bucket:
@@ -442,3 +497,44 @@ root:
         parameterType: STRING
 schemaVersion: 2.1.0
 sdkVersion: kfp-2.16.1
+---
+platforms:
+  kubernetes:
+    deploymentSpec:
+      executors:
+        exec-ingest-invoices:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_S3_ENDPOINT
+              secretKey: AWS_S3_ENDPOINT
+            - envVar: AWS_S3_BUCKET
+              secretKey: AWS_S3_BUCKET
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            optional: false
+            secretName: aws-connection-rhoai-invoices
+            secretNameParameter:
+              runtimeValue:
+                constant: aws-connection-rhoai-invoices
+        exec-register-model:
+          secretAsEnv:
+          - keyToEnv:
+            - envVar: AWS_ACCESS_KEY_ID
+              secretKey: AWS_ACCESS_KEY_ID
+            - envVar: AWS_SECRET_ACCESS_KEY
+              secretKey: AWS_SECRET_ACCESS_KEY
+            - envVar: AWS_S3_ENDPOINT
+              secretKey: AWS_S3_ENDPOINT
+            - envVar: AWS_S3_BUCKET
+              secretKey: AWS_S3_BUCKET
+            - envVar: AWS_DEFAULT_REGION
+              secretKey: AWS_DEFAULT_REGION
+            optional: false
+            secretName: aws-connection-rhoai-invoices
+            secretNameParameter:
+              runtimeValue:
+                constant: aws-connection-rhoai-invoices

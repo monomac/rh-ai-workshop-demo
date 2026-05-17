@@ -89,6 +89,7 @@ do_install() {
   oc apply -f "$HERE/05-dspa.yaml"
   oc apply -f "$HERE/04-workbench.yaml"
   oc apply -f "$HERE/07-model-registry-rbac.yaml"
+  oc apply -f "$HERE/08-serving-runtime.yaml"
 
   echo "==> Waiting for MinIO"
   oc -n "$NS" rollout status deploy/minio --timeout=180s
@@ -122,7 +123,11 @@ do_uninstall() {
   echo "==> Uninstalling demo workloads from namespace '$NS'"
   echo "    (PVCs and the namespace itself are preserved — use 'purge' to wipe)"
 
-  # Reverse order of install, ignoring 'not found' so reruns are safe
+  # Reverse order of install, ignoring 'not found' so reruns are safe.
+  # InferenceServices (created via Dashboard Deploy) go first — they depend
+  # on the ServingRuntime which we deleted in 08.
+  oc -n "$NS" delete inferenceservices --all --ignore-not-found --wait=false
+  oc delete -f "$HERE/08-serving-runtime.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/06-bootstrap-data.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/07-model-registry-rbac.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/04-workbench.yaml"      --ignore-not-found --wait=false

@@ -1,5 +1,5 @@
-# Grant the workbench ServiceAccount permission to use the cluster's
-# Model Registry (`elos-model-registry`) from notebook 03.
+# Grant the workbench *and* DS Pipelines runner ServiceAccounts permission
+# to use the cluster's Model Registry (`elos-model-registry`).
 #
 # Why a RoleBinding in `rhoai-model-registries` (not in our project ns):
 #   The registry's auth proxy validates client tokens by issuing
@@ -10,9 +10,15 @@
 #
 # Why a binding to an existing Role (and not a custom one):
 #   `registry-user-elos-model-registry` is shipped with the
-#   model-registry-operator and is what the dashboard's "Permissions"
-#   tab grants when a user is added to the registry.  We just wire the
-#   wb SA into the same flow.
+#   model-registry-operator and is what the Dashboard's "Permissions"
+#   tab grants when a user is added to the registry.  We just wire our
+#   own SAs into the same flow.
+#
+# Two subjects:
+#   - `invoice-anomaly-wb`     — used by notebook 03 §3.5
+#   - `pipeline-runner-dspa`   — used by every pipeline task pod (including
+#                                the `register-model` component in
+#                                `pipeline/invoice_anomaly_pipeline.py`)
 #
 # This is cross-namespace RBAC -- a Notebook's auto-managed RoleBindings
 # live only inside the project namespace, so we manage this one
@@ -31,4 +37,7 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: invoice-anomaly-wb
+    namespace: rh-ai-workshop
+  - kind: ServiceAccount
+    name: pipeline-runner-dspa
     namespace: rh-ai-workshop
