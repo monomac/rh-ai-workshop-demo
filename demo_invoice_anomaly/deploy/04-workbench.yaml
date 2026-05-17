@@ -62,6 +62,16 @@ spec:
               # the route. Cross-namespace registry RBAC for this SA is granted
               # by deploy/07-model-registry-rbac.yaml.
               value: https://elos-model-registry-rest.apps.rosa.sa-ai.oidv.p3.openshiftapps.com
+            # --- LLM "vysvětlovač" pro review queue (notebook 03 §3.4) ---------
+            # Phi-4 W8A8 in `model-test` namespace serves an OpenAI-compatible
+            # vLLM API. The IS advertises the Service on :80, but the underlying
+            # predictor service is HEADLESS — clients must hit the pod's port
+            # 8080 directly. The explain_with_llm module defaults to this URL,
+            # but we pin it here so the workbench is reproducible.
+            - name: LLM_ENDPOINT
+              value: http://phi-4-quantizedw8a8-version-1-predictor.model-test.svc.cluster.local:8080/v1
+            - name: LLM_MODEL
+              value: phi-4-quantizedw8a8-version-1
           envFrom:
             - secretRef:
                 name: aws-connection-rhoai-invoices   # injektuje AWS_* proměnné

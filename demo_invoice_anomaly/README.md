@@ -13,7 +13,7 @@
 | 1 | **Rychlejší prototypování**              | `notebooks/01_explore_invoices.ipynb` — od nuly k první vizualizaci v 5 buňkách.                   |
 | 2 | **Self-service pro analytiky**           | Notebook 02 má parametry v top-level buňce; doménový expert je tweakuje bez vývojáře.              |
 | 3 | **Reprodukovatelnost a sdílení**         | `src/invoice_features.py` (1 funkce pro train i score) + MLflow run ID + Git-friendly .ipynb.      |
-| 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`).                  |
+| 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`) a navíc **LLM vysvětlovačem** (Phi-4 v `model-test`, OpenAI-kompatibilní API) — controller dostane jedno-větné česky znějící zdůvodnění u každé top-25 podezřelé faktury. |
 | 5 | **AI quickstart pattern**                | Celé repo je quickstartovatelná šablona: `deploy/install.sh` postaví prostředí (vč. MLServer ServingRuntime), `pipeline/run_pipeline.sh` spustí trénink+registraci jedním příkazem, "Deploy" v Model Registry vystaví model jedním kliknutím. |
 | 6 | **Auditovatelnost a compliance**         | MLflow run (notebook trénink) → Model Registry verze (kdo schválil) → DS Pipelines run (kdy běželo automaticky) → KServe InferenceService (kdy a kdo deploynul do produkce) → versionovaný S3 klíč (immutable bytes). Plná evidence pro NIS2 / AI Act. |
 
@@ -32,6 +32,7 @@ demo_invoice_anomaly/
 ├── src/
 │   ├── generate_invoices.py           # generátor — pokud chceš jiný objem nebo seed
 │   ├── invoice_features.py            # SDÍLENÉ featury (train == score)
+│   ├── explain_with_llm.py            # LLM vysvětlovač — OpenAI-kompatibilní klient (stdlib)
 │   └── build_notebooks.py             # source-of-truth notebooků (programaticky generované)
 ├── notebooks/
 │   ├── 01_explore_invoices.ipynb      # controller POV — průzkum dat
@@ -198,6 +199,31 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
    v Open Inference Protocol v2. **Nikdo nepsal řádku Python** mezi
    "model je zaregistrovaný" a "model je v produkci".
 
+7. **"A teď ať mi to model vysvětlí česky."** → V notebooku 03 §3.4
+   běží LLM vysvětlovač (`src/explain_with_llm.py`). Pro top-25 podezřelých
+   řádků posílá per-row request na `phi-4-quantizedw8a8-version-1` v
+   namespace `model-test` (vLLM, OpenAI-kompatibilní `/v1/chat/completions`).
+   Endpoint je v env varech workbenche (`LLM_ENDPOINT`, `LLM_MODEL` —
+   viz `deploy/04-workbench.yaml`), takže notebook si ho jen vyzvedne.
+
+   - Systémový prompt v češtině zakazuje halucinace mimo dodaná data:
+     LLM dostane řádek faktury + reason codes + anomaly score, vrací
+     2-3 věty „proč je to podezřelé". Dořeší se tím poslední slabina
+     review queue — `reason` sloupec je věcný, ale suchý.
+   - Latence na A10G ~3-5 s/řádek, celkem ~1-2 min na 25 položek.
+     Apertus-8B na stejném GPU je ~2× rychlejší (nižší parametry,
+     fp8 quant), případně použij jako fallback (přepiš env vars
+     v workbenchi).
+   - Pokud LLM endpoint nepojede, funkce vrátí fallback string a
+     notebook bez chyby pokračuje na §3.5 (export) — review queue
+     odejde jen s `reason`, bez `vysvětlení`.
+
+   **Audit-pohled na tenhle krok:** všechny prompty + odpovědi jdou
+   pod RBAC stejné SA jako zbytek workbenche; vLLM zalogovává request
+   v `model-test/phi-4-...-predictor`. Pokud auditor chce vidět "proč
+   tohle model říká", má v ruce vstup (řádek faktury + reason codes)
+   i výstup (CSV se sloupcem `vysvětlení`).
+
 ---
 
 ## 6 · Co dál (out-of-scope pro tenhle workshop)
@@ -208,8 +234,11 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
   - Production-grade ingress / mTLS / rate-limiting před prediktorem.
   - Multi-model serving přes ModelMesh (pro shop s tisíci modely).
   - A/B test mezi novou a starou verzí přes Knative traffic-splitting.
-- LLM-vysvětlovač "Proč právě tohle podezření?" (Granite + RAG nad fakturami).
+- ~~LLM-vysvětlovač "Proč právě tohle podezření?"~~ — **už součást demo**
+  (beat 7, notebook 03 §3.4, Phi-4 W8A8 v `model-test`).
 - Feedback loop: controller označí false positive → next run snižuje váhu.
+- RAG: nasypat do LLM kontextu i historii faktur od stejného dodavatele,
+  aby vysvětlení rovnou cituovalo "pětkrát jste platili pod 50 k, teď 1 M".
 
 ---
 
@@ -234,3 +263,7 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 | **Deploy z Model Registry** vytvoří InferenceService, ale predikce vrací HTTP 500 `'dict' object has no attribute 'predict'` | Starší verze pipeline ukládaly do S3 dict bundle (`{"pipeline": ..., "feature_columns": ...}`). MLServer's sklearn runtime volá `.predict()` přímo na výsledku `joblib.load()`, takže potřebuje *bare* sklearn estimator. Aktuální `register_model` zapisuje vedle sebe `model.joblib` (sklearn-only) a `bundle.joblib` (dict, pro notebooky). Pokud máš staré verze, spusť backfill: download `model.joblib`, `joblib.load(...)["pipeline"]`, upload zpátky. |
 | **Deploy z Model Registry** se zasekne na "Loading" / storage-initializer hází `dial tcp: connection refused` | `aws-connection-rhoai-invoices` secret nemá KServe annotace. Apply aktuální `deploy/03-data-connection.yaml` — má `serving.kserve.io/s3-endpoint`, `s3-usehttps=0`, `s3-verifyssl=0`. |
 | V Dashboard `Models` tab je prázdno i po Deploy | Project je nesprávně označen jako `modelmesh-enabled` (ModelMesh, ne KServe). U RHOAI 3.4 self-managed by `kserve` v DSC mělo být `Managed` a `modelmeshserving` neenabled. `oc get dsc -o yaml \| grep -A1 'kserve:'` ověří. |
+| Notebook 03 §3.4 → `Could not resolve host: phi-4-...predictor.model-test.svc.cluster.local` | LLM IS není READY → headless Service nemá endpoints → DNS nevrátí adresu. `oc -n model-test get pods,is` — počkej, až `predictor` pod je Ready. Workshop tip: nech LLM předhřátý před demem (initial cold pull modelcar 1.5 je ~15 GB, ~5 minut). |
+| Notebook 03 §3.4 → connection refused na `:80` | Headless Service nemá proxy na `:80`. Klient musí mluvit na port `8080` (pod listening port). `LLM_ENDPOINT` v `deploy/04-workbench.yaml` to už má; pokud editujete, **musí končit `:8080/v1`**, ne `/v1`. |
+| Notebook 03 §3.4 → CZ výstup zní lámaně / kazí diakritiku | Model nemá oficiální CS support. Apertus-8B i Phi-4 14B mají CS v supported language listu; Granite 3.x a Llama 3.1 ne. Přepiš `LLM_MODEL` / `LLM_ENDPOINT` na supported model. |
+| Notebook 03 §3.4 trvá víc než 5 minut | Buď nemá GPU node (předpoklad: A10G/L4 24 GB VRAM, viz `g5.xlarge` nebo `g6.2xlarge` MachineSet), nebo vLLM běží na CPU runtime → 5-15 tok/s. Zkontroluj `oc -n model-test describe pod <predictor> \| grep nvidia.com/gpu` — request musí mít `1`. |
