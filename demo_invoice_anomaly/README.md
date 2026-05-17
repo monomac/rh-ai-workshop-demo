@@ -12,10 +12,10 @@
 |---|------------------------------------------|----------------------------------------------------------------------------------------------------|
 | 1 | **Rychlejší prototypování**              | `notebooks/01_explore_invoices.ipynb` — od nuly k první vizualizaci v 5 buňkách.                   |
 | 2 | **Self-service pro analytiky**           | Notebook 02 má parametry v top-level buňce; doménový expert je tweakuje bez vývojáře.              |
-| 3 | **Reprodukovatelnost a sdílení**         | `src/invoice_features.py` (1 funkce pro train i score) + MLflow run ID + Git-friendly .ipynb.      |
+| 3 | **Reprodukovatelnost a sdílení**         | `src/invoice_features.py` (1 funkce pro train i score) + MLflow run ID + Git-friendly .ipynb + **Feast feature store** (`src/feast_repo/`) jako platformně vynucený single-source-of-truth pro definice featur — git je zdroj, RHOAI feastoperator zaregistruje. |
 | 4 | **Most mezi daty a byznys týmem**        | Notebook 03 produkuje **review queue** s lidsky čitelnými důvody (`explain_row`) a navíc **LLM vysvětlovačem** (Phi-4 v `model-test`, OpenAI-kompatibilní API) — controller dostane jedno-větné česky znějící zdůvodnění u každé top-25 podezřelé faktury. |
 | 5 | **AI quickstart pattern**                | Celé repo je quickstartovatelná šablona: `deploy/install.sh` postaví prostředí (vč. MLServer ServingRuntime), `pipeline/run_pipeline.sh` spustí trénink+registraci jedním příkazem, "Deploy" v Model Registry vystaví model jedním kliknutím. |
-| 6 | **Auditovatelnost a compliance**         | MLflow run (notebook trénink) → Model Registry verze (kdo schválil) → DS Pipelines run (kdy běželo automaticky) → KServe InferenceService (kdy a kdo deploynul do produkce) → versionovaný S3 klíč (immutable bytes). Plná evidence pro NIS2 / AI Act. |
+| 6 | **Auditovatelnost a compliance**         | Feast registry (definice featur, kdo a kdy) → MLflow run (notebook trénink) → Model Registry verze (kdo schválil) → DS Pipelines run (kdy běželo automaticky) → KServe InferenceService (kdy a kdo deploynul do produkce) → Feast online store (snapshot featur k danému timestampu) → versionovaný S3 klíč (immutable bytes). Plná evidence pro NIS2 / AI Act, včetně "co model viděl, když rozhodoval". |
 
 ---
 
@@ -33,6 +33,12 @@ demo_invoice_anomaly/
 │   ├── generate_invoices.py           # generátor — pokud chceš jiný objem nebo seed
 │   ├── invoice_features.py            # SDÍLENÉ featury (train == score)
 │   ├── explain_with_llm.py            # LLM vysvětlovač — OpenAI-kompatibilní klient (stdlib)
+│   ├── feast_io.py                    # Feast helpers — apply / materialize / parquet write
+│   ├── feast_repo/                    # Feast project (čte feastoperator i workbench)
+│   │   ├── feature_store.yaml         # local provider, sqlite online, file offline
+│   │   ├── entities.py                # invoice entity
+│   │   ├── data_sources.py            # FileSource → MinIO parquet
+│   │   └── feature_views.py           # 9-feature FeatureView
 │   └── build_notebooks.py             # source-of-truth notebooků (programaticky generované)
 ├── notebooks/
 │   ├── 01_explore_invoices.ipynb      # controller POV — průzkum dat
@@ -51,6 +57,7 @@ demo_invoice_anomaly/
     ├── 06-bootstrap-data.yaml
     ├── 07-model-registry-rbac.yaml     # cross-ns RoleBinding → registry-user-elos-model-registry
     ├── 08-serving-runtime.yaml         # MLServer ServingRuntime — povolí "Deploy" z Model Registry
+    ├── 09-feature-store.yaml           # Feast FeatureStore CR (operator-managed, git-clones src/feast_repo)
     └── install.sh
 ```
 
@@ -87,6 +94,49 @@ v env, načtou data z lokálního `../data/`, a MLflow zaloguje do `file:./mlrun
 **Ověřeno:** všechny tři notebooky proběhnou end-to-end na čisté instalaci
 Python 3.10 + balíčky výše. Trénink dává **ROC-AUC ≈ 0.96** a **94 % precision
 v top-50** podezřelých faktur na synthetic datech.
+
+## 3b · Feast feature store
+
+Feast je v `demo_invoice_anomaly` druhou platformní službou vedle MLflow —
+RHOAI 3.4 ho provozuje přes DSC komponentu `feastoperator` (`Managed`).
+Operator stahuje feature definice z gitu, registruje je a vystavuje online
+endpoint:
+
+```
+git (src/feast_repo/) ──┐
+                        ├─→ feastoperator pod (clone + feast apply)
+deploy/09-feature-store ┘        │
+                                 ├─→ /feast-data/registry.db    (definice)
+                                 ├─→ /feast-data/online_store.db (SQLite)
+                                 └─→ Service feast-invoice-anomaly-online:443
+                                       └─→ Client ConfigMap mounted in workbench
+```
+
+Co kde žije:
+
+- `src/feast_repo/feature_store.yaml` — Feast config (project `invoice_anomaly`,
+  local provider, sqlite online, file offline). Čte to operator i workbench.
+- `src/feast_repo/{entities,data_sources,feature_views}.py` — Python kód,
+  který Feast `apply` převede do registry. Source of truth pro featury.
+- `src/feast_io.py` — workbench/pipeline helper: `write_feature_parquet`,
+  `apply_feature_definitions`, `materialize_incremental`, `open_local_store`.
+- `deploy/09-feature-store.yaml` — FeatureStore CR. Pointuje
+  `feastProjectDir.git.url` na tenhle workshop repo, `featureRepoPath` na
+  `demo_invoice_anomaly/src/feast_repo`.
+
+**Ordering caveat:** operator se snaží git-clonovat při bootu CR. Feature
+definitions musí být na `origin/main` **dřív**, než se aplikuje
+`09-feature-store.yaml`. Pokud aplikuješ CR proti repu, který ještě nemá
+`src/feast_repo/`, operator pod uvízne v `CrashLoopBackOff` s
+`fatal: path 'demo_invoice_anomaly/src/feast_repo' does not exist`. Fix:
+push feature definitions na main, pak `oc delete pod -l app.kubernetes.io/instance=invoice-anomaly`
+ať operator re-init.
+
+Workbench čte client config z mountu `/opt/app-root/src/feast-client/feature_store.yaml`,
+ale notebook používá *vlastní* lokální Feast SDK config (`src/feast_repo/`),
+aby šlo z workbench dělat `apply` a `materialize` bez závislosti na shared
+PVC s operator podem. Online endpoint operatoru je `Co dál` — pro MLServer
+inference v produkci.
 
 ---
 
@@ -132,7 +182,13 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 3. **"Když chce model dotrénovat, parametry jsou tady"** → notebook 02,
    PARAMETRY buňka. Doménový expert ji upraví.
 4. **"Audit trail pro NIS2"** → MLflow UI (run params + metrics) →
-   Model Registry (kdo schválil promo do Production).
+   Model Registry (kdo schválil promo do Production) → **Feast registry**
+   (`feast feature-views list` v terminálu workbenche, nebo přímo
+   `oc -n rh-ai-workshop get featurestore invoice-anomaly -o yaml` → spec
+   ukazuje, *odkud* z gitu featury přišly a *kdy* byly registrované).
+   Pro auditora: "podívej se, model viděl těchhle 9 featur, definované
+   tímhle git commitem, vypočítané z tohoto event_timestampu" —
+   Feast point-in-time semantika to dělá deterministicky.
 5. **"A když to chceme každou noc automaticky — pojďme to spustit teď"** →
    přepni do terminálu a v jednom příkazu spusť pipeline naživo:
 
@@ -239,6 +295,15 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 - Feedback loop: controller označí false positive → next run snižuje váhu.
 - RAG: nasypat do LLM kontextu i historii faktur od stejného dodavatele,
   aby vysvětlení rovnou cituovalo "pětkrát jste platili pod 50 k, teď 1 M".
+- **Pipeline (KFP) integrace s Feast** — `ingest_invoices` komponenta čte
+  z Feast historical join místo z CSV, `register_model` taky materializuje
+  do online store. Notebooks 02/03 už to dělají; pipeline je deferred,
+  protože vyžaduje `feast` SDK v pipeline images + RBAC mount client
+  ConfigMap do pipeline pods. Plánováno na další session.
+- **MLServer ↔ Feast online endpoint** — produkční inference (beat 6
+  deploy z Model Registry) by si v ostrém provozu sahala pro featury do
+  Feast `feast-invoice-anomaly-online:443` přes invoice_id, ne dostávala
+  pre-computed vektory. Vyžaduje custom MLServer model wrapper.
 
 ---
 
@@ -267,3 +332,9 @@ Když ukazuješ slide 20 a přepínáš do RHOAI:
 | Notebook 03 §3.4 → connection refused na `:80` | Headless Service nemá proxy na `:80`. Klient musí mluvit na port `8080` (pod listening port). `LLM_ENDPOINT` v `deploy/04-workbench.yaml` to už má; pokud editujete, **musí končit `:8080/v1`**, ne `/v1`. |
 | Notebook 03 §3.4 → CZ výstup zní lámaně / kazí diakritiku | Model nemá oficiální CS support. Apertus-8B i Phi-4 14B mají CS v supported language listu; Granite 3.x a Llama 3.1 ne. Přepiš `LLM_MODEL` / `LLM_ENDPOINT` na supported model. |
 | Notebook 03 §3.4 trvá víc než 5 minut | Buď nemá GPU node (předpoklad: A10G/L4 24 GB VRAM, viz `g5.xlarge` nebo `g6.2xlarge` MachineSet), nebo vLLM běží na CPU runtime → 5-15 tok/s. Zkontroluj `oc -n model-test describe pod <predictor> \| grep nvidia.com/gpu` — request musí mít `1`. |
+| FeatureStore CR pod v `CrashLoopBackOff` s `fatal: path '…/feast_repo' does not exist` | Operator klonuje git ref v `feastProjectDir.git`. Soubory v `demo_invoice_anomaly/src/feast_repo/` musí být na origin/main předtím, než aplikuješ CR. Fix: commit + push featur, pak `oc -n rh-ai-workshop delete pod -l app.kubernetes.io/instance=invoice-anomaly` ať operator re-init z aktuálního ref. |
+| `feast apply` z workbenche selže s `botocore.exceptions.NoCredentialsError` | FileSource v `data_sources.py` čte z `s3://...` přes pyarrow/s3fs. Workbench potřebuje AWS_* z `aws-connection-rhoai-invoices` (envFrom secretRef už je v `04-workbench.yaml`). Restart pod, případně ověř `oc exec invoice-anomaly-wb-0 -- env \| grep AWS_`. |
+| `feast get_online_features` vrátí samé `null` u faktur ze setu | Online store nebyl materializován po posledním `feast apply`, nebo materialize watermark přeskočil novou dávku. Spusť `feast_io.materialize_incremental()` v notebooku — Feast posune watermark a nahraje features z parquet do SQLite. |
+| Online lookup je rychlý, ale hodnoty se neshodují s in-process compute | Pravděpodobně se změnily lookup tabulky (`category_index` / `vendor_freq_table`) — model byl natrénovaný se starou sadou, novou dávku jsi spočítal s aktuální. Fix: `write_feature_parquet(new_df, artifact=artifact, ...)` v §3.4 notebooku 03 — předáváš modelové lookups, ne re-computed. |
+| `feast feature-views list` na clusteru ukazuje 0 FV, i když operator je Ready | Operator klonuje git, ale `runFeastApplyOnInit: false` byl omylem nastavený, nebo feature_views.py má syntax error. `oc logs deploy/feast-invoice-anomaly` ukáže traceback z `feast apply`. |
+| Dashboard ukazuje **"Outdated KServe runtime"** u LLM IS | Project-scoped `ServingRuntime` byl naklonován z template, když template ještě měl starší verzi vLLM. Template se mezitím updatoval (`opendatahub.io/runtime-version`), tvoje SR ne. Diff projeď přes `oc -n model-test get servingruntime <name> -o yaml` vs `oc -n redhat-ods-applications get template vllm-cuda-runtime-template -o yaml` — typicky se mění jen `containers[0].image` a anotace. Patch: `oc -n model-test patch servingruntime <name> --type=json -p='[{"op":"replace","path":"/spec/containers/0/image","value":"<new-image>"},{"op":"replace","path":"/metadata/annotations/opendatahub.io~1runtime-version","value":"v<new>"}]'`. Deployment udělá rolling update — starý pod běží dokud nový nepasuje readiness, takže LLM endpoint zůstane funkční po celou dobu cold pullu (~5-7 min). |

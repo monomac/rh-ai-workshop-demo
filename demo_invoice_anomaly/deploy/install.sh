@@ -90,6 +90,11 @@ do_install() {
   oc apply -f "$HERE/04-workbench.yaml"
   oc apply -f "$HERE/07-model-registry-rbac.yaml"
   oc apply -f "$HERE/08-serving-runtime.yaml"
+  # FeatureStore — must come AFTER the feast_repo/ files are on origin/main,
+  # otherwise the operator's git clone will fail. The apply itself is fine
+  # to run before the workbench: the workbench's feast-client mount is
+  # marked optional so it tolerates a missing ConfigMap.
+  oc apply -f "$HERE/09-feature-store.yaml"
 
   echo "==> Waiting for MinIO"
   oc -n "$NS" rollout status deploy/minio --timeout=180s
@@ -127,6 +132,9 @@ do_uninstall() {
   # InferenceServices (created via Dashboard Deploy) go first — they depend
   # on the ServingRuntime which we deleted in 08.
   oc -n "$NS" delete inferenceservices --all --ignore-not-found --wait=false
+  # FeatureStore goes BEFORE the workbench so the workbench doesn't keep the
+  # client ConfigMap mount busy. Operator removes its own pods + PVC.
+  oc delete -f "$HERE/09-feature-store.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/08-serving-runtime.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/06-bootstrap-data.yaml" --ignore-not-found --wait=false
   oc delete -f "$HERE/07-model-registry-rbac.yaml" --ignore-not-found --wait=false

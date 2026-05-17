@@ -72,17 +72,37 @@ spec:
               value: http://phi-4-quantizedw8a8-version-1-predictor.model-test.svc.cluster.local:8080/v1
             - name: LLM_MODEL
               value: phi-4-quantizedw8a8-version-1
+            # --- Feast (deploy/09-feature-store.yaml) ------------------------
+            # The feastoperator generates `feast-invoice-anomaly-client`
+            # ConfigMap with a feature_store.yaml that points the SDK at the
+            # in-cluster online server. We mount it at a fixed path; the
+            # workbench can read it directly OR copy its online_store / auth
+            # blocks into the local feast_repo/feature_store.yaml when going
+            # remote-online + local-everything-else.
+            - name: FEAST_USAGE
+              value: "False"                              # disable Feast anonymous telemetry
+            - name: FEAST_CLIENT_CONFIG_DIR
+              value: /opt/app-root/src/feast-client
           envFrom:
             - secretRef:
                 name: aws-connection-rhoai-invoices   # injektuje AWS_* proměnné
           volumeMounts:
-            - { name: workdir, mountPath: /opt/app-root/src }
+            - { name: workdir,      mountPath: /opt/app-root/src }
+            - { name: feast-client, mountPath: /opt/app-root/src/feast-client, readOnly: true }
           ports:
             - { name: notebook-port, containerPort: 8888, protocol: TCP }
       volumes:
         - name: workdir
           persistentVolumeClaim:
             claimName: invoice-anomaly-wb-pvc
+        - name: feast-client
+          configMap:
+            # ConfigMap is created by the feastoperator once
+            # deploy/09-feature-store.yaml is applied AND the operator pod
+            # has booted. Optional flag keeps the workbench schedulable even
+            # before the FS exists.
+            name: feast-invoice-anomaly-client
+            optional: true
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

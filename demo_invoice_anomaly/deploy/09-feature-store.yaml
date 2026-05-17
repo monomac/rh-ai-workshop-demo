@@ -1,0 +1,59 @@
+---
+# Feast FeatureStore for the invoice-anomaly demo, managed by the RHOAI
+# feastoperator. Cluster prerequisite (verified live on sa-ai, 2026-05-17):
+#
+#   $ oc get dsc -o jsonpath='{.items[*].spec.components.feastoperator.managementState}'
+#   Managed
+#
+# When this manifest is applied, the operator:
+#   1. Provisions a PVC for /feast-data (online_store.db + registry.db).
+#   2. Spins up an `odh-feature-server-rhel9` pod running the feast online
+#      server with TLS, bound to the operator-generated Service
+#      `feast-invoice-anomaly-online` on port 443.
+#   3. Clones the workshop repo at `ref`, drops into
+#      `featureRepoPath`, and runs `feast apply` (registry populated from
+#      the .py files alongside feature_store.yaml).
+#   4. Writes a client ConfigMap `feast-invoice-anomaly-client` that the
+#      workbench consumes — it contains a feature_store.yaml pointing the
+#      SDK at the in-cluster online server.
+#
+# Ordering note: the feast_repo/ files MUST be on origin/main before this
+# CR is applied — the operator clones them at init. Commit + push first.
+apiVersion: feast.dev/v1
+kind: FeatureStore
+metadata:
+  name: invoice-anomaly
+  namespace: rh-ai-workshop
+  labels:
+    app: invoice-anomaly
+    opendatahub.io/dashboard: "true"
+spec:
+  feastProject: invoice_anomaly
+  # The operator clones this repo on init and runs `feast apply` against
+  # featureRepoPath. Workshop repo is public; no auth needed.
+  feastProjectDir:
+    git:
+      url: https://github.com/monomac/rh-ai-workshop-demo.git
+      ref: main
+      featureRepoPath: demo_invoice_anomaly/src/feast_repo
+  services:
+    # Run `feast apply` automatically when the operator boots — picks up
+    # whatever is on the git ref at that moment.
+    runFeastApplyOnInit: true
+    # Local file registry on the PVC — same DB the in-cluster online server
+    # reads. Workbench uses a separate local registry; both are populated
+    # from the same feast_repo/ source files.
+    registry:
+      local:
+        persistence:
+          file:
+            path: /feast-data/registry.db
+    # SQLite online store on the PVC. Plenty for workshop scale; trivially
+    # swappable for Redis / Postgres later (operator CRD supports both).
+    onlineStore:
+      persistence:
+        file:
+          path: /feast-data/online_store.db
+    # No remote offline server — workbench reads parquet from MinIO
+    # directly via FileSource + s3_endpoint_override.
+    offlineStore: {}

@@ -1,0 +1,29 @@
+# Feast project for the invoice-anomaly demo.
+#
+# Two consumers read this file:
+#   1. The RHOAI feastoperator-managed pod in `rh-ai-workshop` (cloned from git
+#      at the path `demo_invoice_anomaly/src/feast_repo` via the FeatureStore
+#      CR's spec.feastProjectDir.git).
+#   2. The workbench, which can drop into this directory and run `feast apply`
+#      or `feast get-historical-features` directly for development.
+#
+# Stores:
+#   - registry: local SQLite file on /feast-data (server PVC). Operator
+#     runs feast apply on init, so the registry is populated from the .py
+#     files alongside this file.
+#   - online_store: SQLite file on the same PVC. Easy, zero-ops, fine for
+#     ~thousands of features at workshop scale. Graduate to Redis or
+#     Postgres for production.
+#   - offline_store: file provider — FileSources point at S3/MinIO paths
+#     via the s3_endpoint_override kwarg in data_sources.py.
+project: invoice_anomaly
+provider: local
+registry: /feast-data/registry.db
+online_store:
+  type: sqlite
+  path: /feast-data/online_store.db
+offline_store:
+  type: file
+entity_key_serialization_version: 3
+auth:
+  type: no_auth
